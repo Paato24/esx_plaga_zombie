@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tablet Burger Job</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main id="app" class="hidden">
+        <section class="tablet">
+            <header class="tablet-header">
+                <div>
+                    <h1>Tablet de cocina</h1>
+                    <p>Pedidos en tiempo real - PaatoDev</p>
+                </div>
+                <div class="header-actions">
+                    <button id="refreshBtn" class="btn btn-secondary" type="button">Actualizar</button>
+                    <button id="closeBtn" class="btn btn-danger" type="button">Cerrar</button>
+                </div>
+            </header>
+
+            <section class="summary-grid">
+                <article class="summary-card">
+                    <span>Saldo sociedad</span>
+                    <strong id="societyBalance">$0</strong>
+                </article>
+                <article class="summary-card">
+                    <span>Pedidos activos</span>
+                    <strong id="ordersCount">0</strong>
+                </article>
+                <article class="summary-card">
+                    <span>Insumos bajos (<= 5)</span>
+                    <strong id="lowStockCount">0</strong>
+                </article>
+            </section>
+
+            <section class="orders-wrapper">
+                <div class="orders-title-row">
+                    <h2>Listado de pedidos</h2>
+                    <small>ESC para cerrar</small>
+                </div>
+                <div id="ordersList" class="orders-list"></div>
+            </section>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>
