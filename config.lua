@@ -1,6 +1,6 @@
 Config = {}
 
-Config.JobName = 'burgerking'
+Config.JobName = 'mcdonald'
 Config.Debug = false
 
 Config.BossGrades = {
@@ -19,13 +19,13 @@ Config.Points = {
 }
 
 Config.IngredientPoints = {
-    { item = 'bk_meat', label = 'Carne', coords = vec3(-1196.17, -899.78, 14.0) },
-    { item = 'bk_bread', label = 'Pan', coords = vec3(-1197.04, -899.98, 14.0) },
-    { item = 'bk_onion', label = 'Cebolla', coords = vec3(-1197.86, -900.08, 14.0) },
-    { item = 'bk_mustard', label = 'Mostaza', coords = vec3(-1198.68, -900.21, 14.0) },
-    { item = 'bk_mayo', label = 'Mayonesa', coords = vec3(-1199.50, -900.31, 14.0) },
-    { item = 'bk_ketchup', label = 'Ketchup', coords = vec3(-1200.32, -900.45, 14.0) },
-    { item = 'bk_tomato', label = 'Tomate', coords = vec3(-1201.08, -900.56, 14.0) }
+    { item = 'mc_meat', label = 'Carne', coords = vec3(-1196.17, -899.78, 14.0) },
+    { item = 'mc_bread', label = 'Pan', coords = vec3(-1197.04, -899.98, 14.0) },
+    { item = 'mc_onion', label = 'Cebolla', coords = vec3(-1197.86, -900.08, 14.0) },
+    { item = 'mc_mustard', label = 'Mostaza', coords = vec3(-1198.68, -900.21, 14.0) },
+    { item = 'mc_mayo', label = 'Mayonesa', coords = vec3(-1199.50, -900.31, 14.0) },
+    { item = 'mc_ketchup', label = 'Ketchup', coords = vec3(-1200.32, -900.45, 14.0) },
+    { item = 'mc_tomato', label = 'Tomate', coords = vec3(-1201.08, -900.56, 14.0) }
 }
 
 Config.SupplyPackages = {
@@ -33,81 +33,81 @@ Config.SupplyPackages = {
         label = 'Caja de carne x20',
         price = 900,
         items = {
-            bk_meat = 20
+            mc_meat = 20
         }
     },
     bread_box = {
         label = 'Caja de pan x40',
         price = 700,
         items = {
-            bk_bread = 40
+            mc_bread = 40
         }
     },
     veggie_box = {
         label = 'Caja de vegetales x50',
         price = 600,
         items = {
-            bk_onion = 25,
-            bk_tomato = 25
+            mc_onion = 25,
+            mc_tomato = 25
         }
     },
     sauce_box = {
         label = 'Caja de salsas x60',
         price = 550,
         items = {
-            bk_mustard = 20,
-            bk_mayo = 20,
-            bk_ketchup = 20
+            mc_mustard = 20,
+            mc_mayo = 20,
+            mc_ketchup = 20
         }
     }
 }
 
 Config.Recipes = {
     classic = {
-        label = 'Burger Clasica',
+        label = 'Mc Clasica',
         description = 'Carne, pan, cebolla, tomate, ketchup y mostaza.',
         price = 180,
-        outputItem = 'bk_burger_classic',
+        outputItem = 'mc_burger_classic',
         outputCount = 1,
         ingredients = {
-            bk_bread = 2,
-            bk_meat = 1,
-            bk_onion = 1,
-            bk_tomato = 1,
-            bk_ketchup = 1,
-            bk_mustard = 1
+            mc_bread = 2,
+            mc_meat = 1,
+            mc_onion = 1,
+            mc_tomato = 1,
+            mc_ketchup = 1,
+            mc_mustard = 1
         }
     },
     royal = {
-        label = 'Burger Royal',
+        label = 'Mc Royal',
         description = 'Carne doble, pan, cebolla, tomate, ketchup, mostaza y mayo.',
         price = 260,
-        outputItem = 'bk_burger_royal',
+        outputItem = 'mc_burger_royal',
         outputCount = 1,
         ingredients = {
-            bk_bread = 2,
-            bk_meat = 2,
-            bk_onion = 1,
-            bk_tomato = 1,
-            bk_ketchup = 1,
-            bk_mustard = 1,
-            bk_mayo = 1
+            mc_bread = 2,
+            mc_meat = 2,
+            mc_onion = 1,
+            mc_tomato = 1,
+            mc_ketchup = 1,
+            mc_mustard = 1,
+            mc_mayo = 1
         }
     },
     max = {
-        label = 'Burger Max',
+        label = 'Mc Max',
         description = 'Carne triple con todo: pan, cebolla, tomate, ketchup, mostaza y mayo.',
         price = 340,
-        outputItem = 'bk_burger_max',
+        outputItem = 'mc_burger_max',
         outputCount = 1,
         ingredients = {
-            bk_bread = 2,
-            bk_meat = 3,
-            bk_onion = 1,
-            bk_tomato = 2,
-            bk_ketchup = 1,
-            bk_mustard = 1,
-            bk_mayo = 1
+            mc_bread = 2,
+            mc_meat = 3,
+            mc_onion = 1,
+            mc_tomato = 2,
+            mc_ketchup = 1,
+            mc_mustard = 1,
+            mc_mayo = 1
         }
     }
 }
@@ -130,7 +130,7 @@ Config.Notifications = {
     orderPlaced = 'Pedido enviado a cocina.',
     orderReady = 'Tu pedido esta listo para retirar.',
     noReadyOrder = 'No tienes pedidos listos para retirar.',
-    onlyWorkers = 'Solo empleados de la hamburgueseria.',
+    onlyWorkers = 'Solo empleados de Macdonald.',
     onlyBoss = 'Solo el jefe o manager puede usar esta opcion.',
     invalidAmount = 'Cantidad invalida.',
     noSocietyFunds = 'La sociedad no tiene suficiente dinero.',

@@ -80,7 +80,7 @@ local function updateJobState()
 end
 
 local function refreshStateFromServer()
-    local state = lib.callback.await('paatodev_burger:server:getPlayerState', false)
+    local state = lib.callback.await('paatodev_macdonald:server:getPlayerState', false)
     if not state then
         return
     end
@@ -127,7 +127,7 @@ local function openSupplyMenu()
             ),
             icon = 'cart-shopping',
             onSelect = function()
-                local response = lib.callback.await('paatodev_burger:server:buySupplyPackage', false, packageKey)
+                local response = lib.callback.await('paatodev_macdonald:server:buySupplyPackage', false, packageKey)
                 if response and response.ok then
                     notify('success', response.message)
                     refreshStateFromServer()
@@ -139,13 +139,13 @@ local function openSupplyMenu()
     end
 
     lib.registerContext({
-        id = 'paatodev_burger_supply_menu',
+        id = 'paatodev_macdonald_supply_menu',
         title = 'Compra de insumos',
-        menu = 'paatodev_burger_boss_menu',
+        menu = 'paatodev_macdonald_boss_menu',
         options = options
     })
 
-    lib.showContext('paatodev_burger_supply_menu')
+    lib.showContext('paatodev_macdonald_supply_menu')
 end
 
 local function openStockMenu()
@@ -161,13 +161,13 @@ local function openStockMenu()
     end
 
     lib.registerContext({
-        id = 'paatodev_burger_stock_menu',
+        id = 'paatodev_macdonald_stock_menu',
         title = 'Stock actual',
-        menu = 'paatodev_burger_boss_menu',
+        menu = 'paatodev_macdonald_boss_menu',
         options = options
     })
 
-    lib.showContext('paatodev_burger_stock_menu')
+    lib.showContext('paatodev_macdonald_stock_menu')
 end
 
 local function manageSocietyMoney(action)
@@ -192,7 +192,7 @@ local function manageSocietyMoney(action)
         return
     end
 
-    local response = lib.callback.await('paatodev_burger:server:bossMoneyAction', false, action, amount)
+    local response = lib.callback.await('paatodev_macdonald:server:bossMoneyAction', false, action, amount)
     if response and response.ok then
         notify('success', response.message)
         refreshStateFromServer()
@@ -215,7 +215,7 @@ local function openBossMenu()
     refreshStateFromServer()
 
     lib.registerContext({
-        id = 'paatodev_burger_boss_menu',
+        id = 'paatodev_macdonald_boss_menu',
         title = 'Panel de jefe',
         options = {
             {
@@ -254,7 +254,7 @@ local function openBossMenu()
         }
     })
 
-    lib.showContext('paatodev_burger_boss_menu')
+    lib.showContext('paatodev_macdonald_boss_menu')
 end
 
 local function takeIngredient(point)
@@ -281,7 +281,7 @@ local function takeIngredient(point)
         return
     end
 
-    local response = lib.callback.await('paatodev_burger:server:takeIngredient', false, point.item)
+    local response = lib.callback.await('paatodev_macdonald:server:takeIngredient', false, point.item)
     if response and response.ok then
         notify('success', response.message)
     else
@@ -290,7 +290,7 @@ local function takeIngredient(point)
 end
 
 local function startCraft(recipeKey, quantity)
-    local response = lib.callback.await('paatodev_burger:server:requestCraft', false, recipeKey, quantity)
+    local response = lib.callback.await('paatodev_macdonald:server:requestCraft', false, recipeKey, quantity)
     if not response or not response.ok then
         notify('error', response and response.message or Config.Notifications.missingIngredients)
         return
@@ -317,13 +317,13 @@ local function startCraft(recipeKey, quantity)
         })
 
         if not completed then
-            lib.callback.await('paatodev_burger:server:cancelCraft', false, craftData.token)
+            lib.callback.await('paatodev_macdonald:server:cancelCraft', false, craftData.token)
             notify('error', Config.Notifications.craftingCancelled)
             return
         end
     end
 
-    local finishResult = lib.callback.await('paatodev_burger:server:finishCraft', false, craftData.token)
+    local finishResult = lib.callback.await('paatodev_macdonald:server:finishCraft', false, craftData.token)
     if finishResult and finishResult.ok then
         notify('success', finishResult.message)
     else
@@ -372,12 +372,12 @@ local function openCraftMenu()
     end
 
     lib.registerContext({
-        id = 'paatodev_burger_craft_menu',
+        id = 'paatodev_macdonald_craft_menu',
         title = 'Cocina de hamburguesas',
         options = options
     })
 
-    lib.showContext('paatodev_burger_craft_menu')
+    lib.showContext('paatodev_macdonald_craft_menu')
 end
 
 local function placeCustomerOrder(recipeKey)
@@ -415,7 +415,7 @@ local function placeCustomerOrder(recipeKey)
 
     local quantity = math.floor(tonumber(input[1]) or 1)
     local paymentMethod = tostring(input[2] or 'cash')
-    local response = lib.callback.await('paatodev_burger:server:placeOrder', false, recipeKey, quantity, paymentMethod)
+    local response = lib.callback.await('paatodev_macdonald:server:placeOrder', false, recipeKey, quantity, paymentMethod)
 
     if response and response.ok then
         notify('success', response.message)
@@ -443,16 +443,16 @@ local function openCustomerOrderMenu()
     end
 
     lib.registerContext({
-        id = 'paatodev_burger_customer_menu',
+        id = 'paatodev_macdonald_customer_menu',
         title = 'Menu de pedidos',
         options = options
     })
 
-    lib.showContext('paatodev_burger_customer_menu')
+    lib.showContext('paatodev_macdonald_customer_menu')
 end
 
 local function claimReadyOrder()
-    local response = lib.callback.await('paatodev_burger:server:claimReadyOrder', false)
+    local response = lib.callback.await('paatodev_macdonald:server:claimReadyOrder', false)
     if response and response.ok then
         notify('success', response.message)
     else
@@ -501,7 +501,7 @@ local function registerTargetZones()
         debug = Config.Debug,
         options = {
             {
-                name = 'paatodev_burger_boss_zone',
+                name = 'paatodev_macdonald_boss_zone',
                 icon = 'fa-solid fa-user-tie',
                 label = 'Panel de jefe',
                 canInteract = function()
@@ -518,7 +518,7 @@ local function registerTargetZones()
         debug = Config.Debug,
         options = {
             {
-                name = 'paatodev_burger_craft_zone',
+                name = 'paatodev_macdonald_craft_zone',
                 icon = 'fa-solid fa-kitchen-set',
                 label = 'Cocinar hamburguesas',
                 canInteract = function()
@@ -535,7 +535,7 @@ local function registerTargetZones()
         debug = Config.Debug,
         options = {
             {
-                name = 'paatodev_burger_order_zone',
+                name = 'paatodev_macdonald_order_zone',
                 icon = 'fa-solid fa-table-list',
                 label = 'Hacer pedido',
                 onSelect = openCustomerOrderMenu
@@ -549,7 +549,7 @@ local function registerTargetZones()
         debug = Config.Debug,
         options = {
             {
-                name = 'paatodev_burger_pickup_zone',
+                name = 'paatodev_macdonald_pickup_zone',
                 icon = 'fa-solid fa-box',
                 label = 'Retirar pedido listo',
                 onSelect = claimReadyOrder
@@ -564,7 +564,7 @@ local function registerTargetZones()
             debug = Config.Debug,
             options = {
                 {
-                    name = ('paatodev_burger_ingredient_%s'):format(point.item),
+                    name = ('paatodev_macdonald_ingredient_%s'):format(point.item),
                     icon = 'fa-solid fa-box-open',
                     label = ('Tomar %s'):format(point.label),
                     canInteract = function()
@@ -579,10 +579,10 @@ local function registerTargetZones()
     end
 end
 
-RegisterCommand('paatodev_burger_tablet', function()
+RegisterCommand('paatodev_macdonald_tablet', function()
     toggleTablet()
 end, false)
-RegisterKeyMapping('paatodev_burger_tablet', 'Abrir tablet de pedidos de hamburgueseria', 'keyboard', 'F5')
+RegisterKeyMapping('paatodev_macdonald_tablet', 'Abrir tablet de pedidos de Macdonald', 'keyboard', 'F5')
 
 RegisterNUICallback('close', function(_, cb)
     closeTablet()
@@ -603,7 +603,7 @@ RegisterNUICallback('updateOrderStatus', function(data, cb)
 
     local orderId = tonumber(data.orderId)
     local status = tostring(data.status or '')
-    local response = lib.callback.await('paatodev_burger:server:updateOrderStatus', false, orderId, status)
+    local response = lib.callback.await('paatodev_macdonald:server:updateOrderStatus', false, orderId, status)
 
     if response and response.ok then
         notify('success', response.message)
@@ -614,18 +614,18 @@ RegisterNUICallback('updateOrderStatus', function(data, cb)
     cb(response or { ok = false, message = 'Sin respuesta del servidor.' })
 end)
 
-RegisterNetEvent('paatodev_burger:client:syncOrders', function(orderList)
+RegisterNetEvent('paatodev_macdonald:client:syncOrders', function(orderList)
     CachedOrders = orderList or {}
     pushTabletData()
 end)
 
-RegisterNetEvent('paatodev_burger:client:updateSocietyState', function(stock, balance)
+RegisterNetEvent('paatodev_macdonald:client:updateSocietyState', function(stock, balance)
     CachedStock = stock or {}
     SocietyBalance = balance or 0
     pushTabletData()
 end)
 
-RegisterNetEvent('paatodev_burger:client:newOrderAlert', function(orderData)
+RegisterNetEvent('paatodev_macdonald:client:newOrderAlert', function(orderData)
     if not IsWorker then
         return
     end
@@ -634,7 +634,7 @@ RegisterNetEvent('paatodev_burger:client:newOrderAlert', function(orderData)
     notify('inform', ('Nuevo pedido recibido: %s'):format(label))
 end)
 
-RegisterNetEvent('paatodev_burger:client:orderReadyNotify', function(orderId, recipeLabel)
+RegisterNetEvent('paatodev_macdonald:client:orderReadyNotify', function(orderId, recipeLabel)
     local label = recipeLabel or 'Tu pedido'
     notify('success', ('%s (#%s) esta listo para retirar.'):format(label, orderId))
 end)
@@ -644,7 +644,7 @@ RegisterNetEvent('esx:playerLoaded', function(xPlayer)
     updateJobState()
     refreshStateFromServer()
     if IsWorker then
-        TriggerServerEvent('paatodev_burger:server:requestFullSync')
+        TriggerServerEvent('paatodev_macdonald:server:requestFullSync')
     end
 end)
 
@@ -653,7 +653,7 @@ RegisterNetEvent('esx:setJob', function(job)
     updateJobState()
     refreshStateFromServer()
     if IsWorker then
-        TriggerServerEvent('paatodev_burger:server:requestFullSync')
+        TriggerServerEvent('paatodev_macdonald:server:requestFullSync')
     end
 end)
 
@@ -680,6 +680,6 @@ CreateThread(function()
     updateJobState()
     refreshStateFromServer()
     if IsWorker then
-        TriggerServerEvent('paatodev_burger:server:requestFullSync')
+        TriggerServerEvent('paatodev_macdonald:server:requestFullSync')
     end
 end)

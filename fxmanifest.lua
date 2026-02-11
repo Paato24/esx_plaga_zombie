@@ -3,7 +3,7 @@ game 'gta5'
 lua54 'yes'
 
 author 'PaatoDev'
-description 'Trabajo de hamburgueseria con pedidos en tiempo real y tablet'
+description 'Trabajo de Macdonald con pedidos en tiempo real y tablet'
 version '1.0.0'
 
 dependencies {

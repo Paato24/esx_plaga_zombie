@@ -22,7 +22,7 @@ local function logDebug(message)
         return
     end
 
-    print(('[paatodev_burgerjob] %s'):format(message))
+    print(('[paatodev_macdonald] %s'):format(message))
 end
 
 local function getIdentifier(xPlayer)
@@ -188,7 +188,7 @@ local function getOrdersForClient()
 end
 
 local function persistSocietyBalance()
-    MySQL.update.await('UPDATE paatodev_burger_society SET balance = ?, updated_at = NOW() WHERE job_name = ?', {
+    MySQL.update.await('UPDATE paatodev_macdonald_society SET balance = ?, updated_at = NOW() WHERE job_name = ?', {
         SocietyBalance,
         Config.JobName
     })
@@ -196,7 +196,7 @@ end
 
 local function persistStockItem(itemName)
     MySQL.update.await([[
-        INSERT INTO paatodev_burger_stock (job_name, item_name, amount)
+        INSERT INTO paatodev_macdonald_stock (job_name, item_name, amount)
         VALUES (?, ?, ?)
         ON DUPLICATE KEY UPDATE amount = VALUES(amount)
     ]], { Config.JobName, itemName, Stock[itemName] or 0 })
@@ -245,14 +245,14 @@ local function broadcastWorkerState()
     local payloadStock = copyStock()
 
     for _, source in ipairs(getWorkerSources()) do
-        TriggerClientEvent('paatodev_burger:client:syncOrders', source, payloadOrders)
-        TriggerClientEvent('paatodev_burger:client:updateSocietyState', source, payloadStock, SocietyBalance)
+        TriggerClientEvent('paatodev_macdonald:client:syncOrders', source, payloadOrders)
+        TriggerClientEvent('paatodev_macdonald:client:updateSocietyState', source, payloadStock, SocietyBalance)
     end
 end
 
 local function ensureDatabase()
     MySQL.query.await([[
-        CREATE TABLE IF NOT EXISTS paatodev_burger_society (
+        CREATE TABLE IF NOT EXISTS paatodev_macdonald_society (
             job_name VARCHAR(64) NOT NULL,
             balance INT NOT NULL DEFAULT 0,
             updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -261,7 +261,7 @@ local function ensureDatabase()
     ]])
 
     MySQL.query.await([[
-        CREATE TABLE IF NOT EXISTS paatodev_burger_stock (
+        CREATE TABLE IF NOT EXISTS paatodev_macdonald_stock (
             job_name VARCHAR(64) NOT NULL,
             item_name VARCHAR(64) NOT NULL,
             amount INT NOT NULL DEFAULT 0,
@@ -270,7 +270,7 @@ local function ensureDatabase()
     ]])
 
     MySQL.query.await([[
-        CREATE TABLE IF NOT EXISTS paatodev_burger_orders (
+        CREATE TABLE IF NOT EXISTS paatodev_macdonald_orders (
             id INT NOT NULL AUTO_INCREMENT,
             job_name VARCHAR(64) NOT NULL,
             customer_identifier VARCHAR(80) NOT NULL,
@@ -294,7 +294,7 @@ local function ensureDatabase()
 end
 
 local function loadSociety()
-    local row = MySQL.single.await('SELECT balance FROM paatodev_burger_society WHERE job_name = ?', {
+    local row = MySQL.single.await('SELECT balance FROM paatodev_macdonald_society WHERE job_name = ?', {
         Config.JobName
     })
 
@@ -303,7 +303,7 @@ local function loadSociety()
         return
     end
 
-    MySQL.insert.await('INSERT INTO paatodev_burger_society (job_name, balance) VALUES (?, ?)', {
+    MySQL.insert.await('INSERT INTO paatodev_macdonald_society (job_name, balance) VALUES (?, ?)', {
         Config.JobName,
         0
     })
@@ -316,13 +316,13 @@ local function loadStock()
 
     for itemName in pairs(tracked) do
         Stock[itemName] = 0
-        MySQL.insert.await('INSERT IGNORE INTO paatodev_burger_stock (job_name, item_name, amount) VALUES (?, ?, 0)', {
+        MySQL.insert.await('INSERT IGNORE INTO paatodev_macdonald_stock (job_name, item_name, amount) VALUES (?, ?, 0)', {
             Config.JobName,
             itemName
         })
     end
 
-    local rows = MySQL.query.await('SELECT item_name, amount FROM paatodev_burger_stock WHERE job_name = ?', {
+    local rows = MySQL.query.await('SELECT item_name, amount FROM paatodev_macdonald_stock WHERE job_name = ?', {
         Config.JobName
     }) or {}
 
@@ -335,7 +335,7 @@ local function loadOrders()
     Orders = {}
     local rows = MySQL.query.await([[
         SELECT *
-        FROM paatodev_burger_orders
+        FROM paatodev_macdonald_orders
         WHERE job_name = ?
           AND status IN ('pending', 'in_progress', 'ready')
         ORDER BY id ASC
@@ -396,7 +396,7 @@ CreateThread(function()
     end)
 end)
 
-lib.callback.register('paatodev_burger:server:getPlayerState', function(source)
+lib.callback.register('paatodev_macdonald:server:getPlayerState', function(source)
     local xPlayer = ESX.GetPlayerFromId(source)
     local worker = isWorker(xPlayer)
     local boss = isBoss(xPlayer)
@@ -411,7 +411,7 @@ lib.callback.register('paatodev_burger:server:getPlayerState', function(source)
     }
 end)
 
-lib.callback.register('paatodev_burger:server:bossMoneyAction', function(source, action, amount)
+lib.callback.register('paatodev_macdonald:server:bossMoneyAction', function(source, action, amount)
     local xPlayer = ESX.GetPlayerFromId(source)
     if not isBoss(xPlayer) then
         return { ok = false, message = Config.Notifications.onlyBoss }
@@ -454,7 +454,7 @@ lib.callback.register('paatodev_burger:server:bossMoneyAction', function(source,
     return { ok = false, message = 'Accion invalida.' }
 end)
 
-lib.callback.register('paatodev_burger:server:buySupplyPackage', function(source, packageKey)
+lib.callback.register('paatodev_macdonald:server:buySupplyPackage', function(source, packageKey)
     local xPlayer = ESX.GetPlayerFromId(source)
     if not isBoss(xPlayer) then
         return { ok = false, message = Config.Notifications.onlyBoss }
@@ -484,7 +484,7 @@ lib.callback.register('paatodev_burger:server:buySupplyPackage', function(source
     return { ok = true, message = ('Compraste %s por $%d.'):format(package.label, package.price), balance = SocietyBalance }
 end)
 
-lib.callback.register('paatodev_burger:server:takeIngredient', function(source, itemName)
+lib.callback.register('paatodev_macdonald:server:takeIngredient', function(source, itemName)
     local xPlayer = ESX.GetPlayerFromId(source)
     if not isWorker(xPlayer) then
         return { ok = false, message = Config.Notifications.onlyWorkers }
@@ -517,7 +517,7 @@ lib.callback.register('paatodev_burger:server:takeIngredient', function(source, 
     }
 end)
 
-lib.callback.register('paatodev_burger:server:requestCraft', function(source, recipeKey, quantity)
+lib.callback.register('paatodev_macdonald:server:requestCraft', function(source, recipeKey, quantity)
     local xPlayer = ESX.GetPlayerFromId(source)
     if not isWorker(xPlayer) then
         return { ok = false, message = Config.Notifications.onlyWorkers }
@@ -584,7 +584,7 @@ lib.callback.register('paatodev_burger:server:requestCraft', function(source, re
     }
 end)
 
-lib.callback.register('paatodev_burger:server:cancelCraft', function(source, token)
+lib.callback.register('paatodev_macdonald:server:cancelCraft', function(source, token)
     local session = CraftSessions[source]
     if session and session.token == token then
         CraftSessions[source] = nil
@@ -593,7 +593,7 @@ lib.callback.register('paatodev_burger:server:cancelCraft', function(source, tok
     return true
 end)
 
-lib.callback.register('paatodev_burger:server:finishCraft', function(source, token)
+lib.callback.register('paatodev_macdonald:server:finishCraft', function(source, token)
     local xPlayer = ESX.GetPlayerFromId(source)
     if not isWorker(xPlayer) then
         return { ok = false, message = Config.Notifications.onlyWorkers }
@@ -667,7 +667,7 @@ lib.callback.register('paatodev_burger:server:finishCraft', function(source, tok
     }
 end)
 
-lib.callback.register('paatodev_burger:server:placeOrder', function(source, recipeKey, quantity, paymentMethod)
+lib.callback.register('paatodev_macdonald:server:placeOrder', function(source, recipeKey, quantity, paymentMethod)
     if not isNearCoords(source, Config.Points.OrderKiosk, Config.TargetDistance + 1.0) then
         return { ok = false, message = 'Debes estar en el punto de pedidos.' }
     end
@@ -698,7 +698,7 @@ lib.callback.register('paatodev_burger:server:placeOrder', function(source, reci
     local outputCount = recipe.outputCount or 1
 
     local insertId = MySQL.insert.await([[
-        INSERT INTO paatodev_burger_orders
+        INSERT INTO paatodev_macdonald_orders
             (job_name, customer_identifier, customer_name, recipe_key, recipe_label, output_item, output_count, quantity, total_price, status)
         VALUES
             (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
@@ -736,7 +736,7 @@ lib.callback.register('paatodev_burger:server:placeOrder', function(source, reci
 
     local orderPreview = serialiseOrder(Orders[insertId])
     for _, workerSource in ipairs(getWorkerSources()) do
-        TriggerClientEvent('paatodev_burger:client:newOrderAlert', workerSource, orderPreview)
+        TriggerClientEvent('paatodev_macdonald:client:newOrderAlert', workerSource, orderPreview)
     end
 
     return {
@@ -746,7 +746,7 @@ lib.callback.register('paatodev_burger:server:placeOrder', function(source, reci
     }
 end)
 
-lib.callback.register('paatodev_burger:server:updateOrderStatus', function(source, orderId, newStatus)
+lib.callback.register('paatodev_macdonald:server:updateOrderStatus', function(source, orderId, newStatus)
     local xPlayer = ESX.GetPlayerFromId(source)
     if not isWorker(xPlayer) then
         return { ok = false, message = Config.Notifications.onlyWorkers }
@@ -790,7 +790,7 @@ lib.callback.register('paatodev_burger:server:updateOrderStatus', function(sourc
     order.status = status
 
     MySQL.update.await([[
-        UPDATE paatodev_burger_orders
+        UPDATE paatodev_macdonald_orders
         SET status = ?, assigned_identifier = ?, assigned_name = ?, updated_at = NOW()
         WHERE id = ?
     ]], {
@@ -809,14 +809,14 @@ lib.callback.register('paatodev_burger:server:updateOrderStatus', function(sourc
     if status == 'ready' then
         local customerSource = getSourceByIdentifier(order.customer_identifier)
         if customerSource then
-            TriggerClientEvent('paatodev_burger:client:orderReadyNotify', customerSource, order.id, order.recipe_label)
+            TriggerClientEvent('paatodev_macdonald:client:orderReadyNotify', customerSource, order.id, order.recipe_label)
         end
     end
 
     return { ok = true, message = 'Estado del pedido actualizado.' }
 end)
 
-lib.callback.register('paatodev_burger:server:claimReadyOrder', function(source)
+lib.callback.register('paatodev_macdonald:server:claimReadyOrder', function(source)
     if not isNearCoords(source, Config.Points.Pickup, Config.TargetDistance + 1.0) then
         return { ok = false, message = 'Debes estar en el punto de retiro.' }
     end
@@ -853,7 +853,7 @@ lib.callback.register('paatodev_burger:server:claimReadyOrder', function(source)
     selectedOrder.status = 'completed'
 
     MySQL.update.await([[
-        UPDATE paatodev_burger_orders
+        UPDATE paatodev_macdonald_orders
         SET status = 'completed', updated_at = NOW()
         WHERE id = ?
     ]], {
@@ -874,18 +874,18 @@ AddEventHandler('playerDropped', function()
     CraftSessions[source] = nil
 end)
 
-RegisterNetEvent('paatodev_burger:server:requestFullSync', function()
+RegisterNetEvent('paatodev_macdonald:server:requestFullSync', function()
     local source = source
     local xPlayer = ESX.GetPlayerFromId(source)
     if not isWorker(xPlayer) then
         return
     end
 
-    TriggerClientEvent('paatodev_burger:client:syncOrders', source, getOrdersForClient())
-    TriggerClientEvent('paatodev_burger:client:updateSocietyState', source, copyStock(), SocietyBalance)
+    TriggerClientEvent('paatodev_macdonald:client:syncOrders', source, getOrdersForClient())
+    TriggerClientEvent('paatodev_macdonald:client:updateSocietyState', source, copyStock(), SocietyBalance)
 end)
 
-RegisterCommand('burgerjob_sync', function(source)
+RegisterCommand('macdonald_sync', function(source)
     if source ~= 0 then
         notify(source, 'error', 'Este comando solo puede ejecutarse desde consola.')
         return
