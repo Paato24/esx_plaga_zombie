@@ -2,7 +2,7 @@ local Demo = {}
 
 local config = {
     mode = "test",
-    retries = 3,
+    prefix = "BK",
 }
 
 function Demo.greet(playerName)
@@ -13,16 +13,16 @@ function Demo.greet(playerName)
     return ("Hola, %s"):format(playerName)
 end
 
-function Demo.multiply(a, b)
-    return a * b
+function Demo.buildCode(playerName)
+    local safeName = playerName or "invitado"
+    return ("%s-%s"):format(config.prefix, safeName:upper())
 end
 
 function Demo.summary(playerName)
     return {
         greeting = Demo.greet(playerName),
-        value = Demo.multiply(4, 5),
+        code = Demo.buildCode(playerName),
         mode = config.mode,
-        retries = config.retries,
     }
 end
 
