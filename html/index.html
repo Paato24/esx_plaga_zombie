@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Org Hub</title>
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div id="app" class="hidden">
+        <div class="panel">
+            <header class="panel-header">
+                <div>
+                    <h1>Org Hub ESX</h1>
+                    <p id="header-subtitle">Gestion de banda, mafia y cartel</p>
+                </div>
+                <button id="close-btn" class="danger">Cerrar</button>
+            </header>
+
+            <nav class="tabs" id="tabs">
+                <button data-click="tab" data-tab="overview">Resumen</button>
+                <button data-click="tab" data-tab="members">Miembros</button>
+                <button data-click="tab" data-tab="ranks">Rangos</button>
+                <button data-click="tab" data-tab="points">Puntos</button>
+                <button data-click="tab" data-tab="assets">Activos</button>
+                <button data-click="tab" data-tab="missions">Misiones</button>
+                <button data-click="tab" data-tab="processing">Drogas</button>
+                <button data-click="tab" data-tab="armory">Armeria</button>
+                <button data-click="tab" data-tab="invites">Invitaciones</button>
+            </nav>
+
+            <main class="panel-content">
+                <section id="tab-overview" class="tab-pane"></section>
+                <section id="tab-members" class="tab-pane"></section>
+                <section id="tab-ranks" class="tab-pane"></section>
+                <section id="tab-points" class="tab-pane"></section>
+                <section id="tab-assets" class="tab-pane"></section>
+                <section id="tab-missions" class="tab-pane"></section>
+                <section id="tab-processing" class="tab-pane"></section>
+                <section id="tab-armory" class="tab-pane"></section>
+                <section id="tab-invites" class="tab-pane"></section>
+            </main>
+
+            <footer class="panel-footer">
+                <p id="status-message">Listo.</p>
+            </footer>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
