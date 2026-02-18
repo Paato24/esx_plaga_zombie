@@ -57,10 +57,10 @@ esx_org_hub/
 ensure oxmysql
 ensure es_extended
 ensure ox_inventory
-ensure esx_org_hub
+ensure <nombre_de_tu_carpeta_recurso>
 ```
 
-3. Reinicia el servidor o ejecuta `ensure esx_org_hub`.
+3. Reinicia el servidor o ejecuta `ensure <nombre_de_tu_carpeta_recurso>`.
 
 ## Base de datos
 
