@@ -3,7 +3,8 @@ const appState = {
     route: 'overview',
     context: {},
     data: null,
-    staticData: null
+    staticData: null,
+    createDraftPoints: []
 };
 
 const tabNames = [
@@ -15,7 +16,8 @@ const tabNames = [
     'missions',
     'processing',
     'armory',
-    'invites'
+    'invites',
+    'logs'
 ];
 
 function getResourceName() {
@@ -179,6 +181,47 @@ function renderPendingInvitesTable(invites) {
     `;
 }
 
+function renderCreateDraftPointsTable() {
+    const rows = appState.createDraftPoints || [];
+    if (!rows.length) {
+        return '<p class="muted">No hay puntos iniciales personalizados capturados.</p>';
+    }
+
+    return `
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Tipo</th>
+                    <th>Coords</th>
+                    <th>Radio</th>
+                    <th>Accion</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${rows
+                    .map((point, index) => {
+                        const coords = point.coords || {};
+                        return `
+                            <tr>
+                                <td>${index + 1}</td>
+                                <td>${escapeHtml(point.pointType || '')}</td>
+                                <td class="code">${Number(coords.x || 0).toFixed(2)}, ${Number(coords.y || 0).toFixed(2)}, ${Number(
+                          coords.z || 0
+                      ).toFixed(2)}</td>
+                                <td>${Number(point.radius || 2.0).toFixed(1)}</td>
+                                <td>
+                                    <button class="tiny danger" data-click="remove-create-point" data-index="${index + 1}">Quitar</button>
+                                </td>
+                            </tr>
+                        `;
+                    })
+                    .join('')}
+            </tbody>
+        </table>
+    `;
+}
+
 function renderOverview() {
     const target = document.getElementById('tab-overview');
     const membership = appState.data?.membership;
@@ -193,6 +236,14 @@ function renderOverview() {
                         ${escapeHtml(entry.label)} - ${formatMoney(entry.createPrice)} - max ${entry.maxMembers}
                     </option>
                 `;
+            })
+            .join('');
+
+        const pointTypes = appState.staticData?.pointTypes || {};
+        const pointTypeOptions = Object.keys(pointTypes)
+            .sort()
+            .map((pointType) => {
+                return `<option value="${escapeHtml(pointType)}">${escapeHtml(pointTypes[pointType].label || pointType)}</option>`;
             })
             .join('');
 
@@ -215,6 +266,25 @@ function renderOverview() {
                     </div>
                     <button data-click="create-org" class="primary">Crear organizacion</button>
                 </div>
+            </div>
+
+            <div class="card">
+                <h3>Puntos iniciales personalizados (opcional)</h3>
+                <p class="muted">Pulsa capturar para guardar tu posicion actual como punto inicial antes de crear.</p>
+                <div class="row">
+                    <select id="create-point-type">${pointTypeOptions}</select>
+                    <button data-click="capture-create-point" class="primary">Capturar punto actual</button>
+                    <button data-click="clear-create-points" class="warning">Limpiar todos</button>
+                </div>
+                <div class="row">
+                    <input id="create-point-x" placeholder="X manual">
+                    <input id="create-point-y" placeholder="Y manual">
+                    <input id="create-point-z" placeholder="Z manual">
+                    <input id="create-point-h" placeholder="Heading" value="0">
+                    <input id="create-point-r" placeholder="Radio" value="2.0">
+                    <button data-click="add-manual-create-point">Agregar manual</button>
+                </div>
+                ${renderCreateDraftPointsTable()}
             </div>
 
             <h3>Invitaciones pendientes</h3>
@@ -262,6 +332,20 @@ function renderOverview() {
             <p class="hint">Estas acciones requieren marcador boss/organization.</p>
         </div>
 
+        ${
+            membership.isOwner
+                ? `
+            <div class="card">
+                <h3>Transferir liderazgo</h3>
+                <div class="row">
+                    <input id="transfer-owner-identifier" placeholder="Identifier del miembro">
+                    <button data-click="transfer-ownership" class="warning">Transferir</button>
+                </div>
+            </div>
+        `
+                : ''
+        }
+
         <div class="card">
             <h3>Acciones administrativas</h3>
             <div class="row">
@@ -286,6 +370,7 @@ function renderMembers() {
     const members = appState.data?.members || [];
     const playerIdentifier = appState.data?.player?.identifier;
     const canManage = hasPermission('manage_members');
+    const isOwner = Boolean(appState.data?.membership?.isOwner);
 
     target.innerHTML = `
         <h2>Miembros</h2>
@@ -320,7 +405,17 @@ function renderMembers() {
                                                   <button class="tiny warning" data-click="demote-member" data-identifier="${encodedIdentifier}">Degradar</button>
                                                   <button class="tiny danger" data-click="kick-member" data-identifier="${encodedIdentifier}">Expulsar</button>
                                               `
-                                                      : '<span class="muted">-</span>'
+                                                      : ''
+                                              }
+                                              ${
+                                                  isOwner && !isSelf
+                                                      ? `<button class="tiny warning" data-click="transfer-ownership-inline" data-identifier="${encodedIdentifier}">Transferir</button>`
+                                                      : ''
+                                              }
+                                              ${
+                                                  !canManage && !(isOwner && !isSelf)
+                                                      ? '<span class="muted">-</span>'
+                                                      : ''
                                               }
                                           </td>
                                       </tr>
@@ -419,40 +514,68 @@ function renderPoints() {
     const pointTypes = appState.staticData?.pointTypes || {};
     const canManage = hasPermission('manage_points');
 
-    const rows = Object.keys(pointTypes)
+    const typeOptions = Object.keys(pointTypes)
         .sort()
         .map((pointType) => {
-            const point = points.find((entry) => entry.point_type === pointType);
-            const location = point
-                ? `${Number(point.x).toFixed(2)}, ${Number(point.y).toFixed(2)}, ${Number(point.z).toFixed(2)}`
-                : 'No definido';
-
-            return `
-                <tr>
-                    <td>${escapeHtml(pointTypes[pointType].label || pointType)}</td>
-                    <td class="code">${escapeHtml(location)}</td>
-                    <td>${point ? Number(point.radius).toFixed(1) : '-'}</td>
-                    <td class="inline-actions">
-                        ${
-                            canManage
-                                ? `
-                            <button class="tiny primary" data-click="set-point" data-point-type="${escapeHtml(pointType)}">Set aqui</button>
-                            <button class="tiny danger" data-click="delete-point" data-point-type="${escapeHtml(pointType)}">Eliminar</button>
-                        `
-                                : '<span class="muted">-</span>'
-                        }
-                    </td>
-                </tr>
-            `;
+            return `<option value="${escapeHtml(pointType)}">${escapeHtml(pointTypes[pointType].label || pointType)}</option>`;
         })
         .join('');
 
+    const sortedPoints = [...points].sort((a, b) => {
+        if (a.point_type === b.point_type) return Number(a.id) - Number(b.id);
+        return String(a.point_type).localeCompare(String(b.point_type));
+    });
+
+    const rows = sortedPoints.length
+        ? sortedPoints
+              .map((point) => {
+                  return `
+                    <tr>
+                        <td>${point.id}</td>
+                        <td>${escapeHtml(point.point_type)}</td>
+                        <td>${escapeHtml(point.label || '')}</td>
+                        <td class="code">${Number(point.x).toFixed(2)}, ${Number(point.y).toFixed(2)}, ${Number(point.z).toFixed(2)}</td>
+                        <td>${Number(point.radius || 2.0).toFixed(1)}</td>
+                        <td class="inline-actions">
+                            ${
+                                canManage
+                                    ? `
+                                <button class="tiny primary" data-click="move-point" data-point-id="${point.id}" data-point-type="${escapeHtml(
+                                          point.point_type
+                                      )}">Mover aqui</button>
+                                <button class="tiny danger" data-click="delete-point" data-point-id="${point.id}">Eliminar</button>
+                            `
+                                    : '<span class="muted">-</span>'
+                            }
+                        </td>
+                    </tr>
+                `;
+              })
+              .join('')
+        : '<tr><td colspan="6" class="muted">No hay puntos definidos.</td></tr>';
+
     target.innerHTML = `
         <h2>Puntos de organizacion</h2>
+        ${
+            canManage
+                ? `
+            <div class="card">
+                <h3>Agregar punto en tu posicion actual</h3>
+                <div class="row">
+                    <select id="point-new-type">${typeOptions}</select>
+                    <input id="point-new-radius" type="number" min="1.5" max="5.0" step="0.1" placeholder="Radio (opcional)">
+                    <button data-click="set-point" class="primary">Agregar punto</button>
+                </div>
+            </div>
+        `
+                : ''
+        }
         <table>
             <thead>
                 <tr>
+                    <th>ID</th>
                     <th>Tipo</th>
+                    <th>Label</th>
                     <th>Ubicacion</th>
                     <th>Radio</th>
                     <th>Accion</th>
@@ -605,13 +728,19 @@ function renderMissions() {
                 <p>Destino: <span class="code">${Number(activeMission.target.x).toFixed(2)}, ${Number(
                       activeMission.target.y
                   ).toFixed(2)}, ${Number(activeMission.target.z).toFixed(2)}</span></p>
+                <p>Participantes: ${activeMission.participantsCount || 0}</p>
                 <div class="row">
+                    ${
+                        !activeMission.isParticipant
+                            ? '<button class="success" data-click="join-mission">Unirme a la mision</button>'
+                            : '<button class="warning" data-click="leave-mission">Salir de la mision</button>'
+                    }
                     <button class="warning" data-click="cancel-mission">Cancelar mision</button>
                 </div>
                 <p class="hint">Ve al marcador verde y pulsa E para completarla.</p>
             </div>
         `
-                : '<p class="muted">No tienes mision activa.</p>'
+                : '<p class="muted">No hay mision activa para tu organizacion.</p>'
         }
 
         <div class="card">
@@ -646,7 +775,7 @@ function renderMissions() {
                     }
                 </tbody>
             </table>
-            <p class="hint">Iniciar mision requiere estar en el punto mission.</p>
+            <p class="hint">Iniciar/unirte a mision requiere estar en el punto mission.</p>
         </div>
     `;
 }
@@ -665,7 +794,7 @@ function renderProcessing() {
         <h2>Procesamiento de drogas</h2>
         <table>
             <thead>
-                <tr><th>Receta</th><th>Inputs</th><th>Outputs</th><th>Nivel</th><th>Rango</th><th>XP</th><th>Accion</th></tr>
+                <tr><th>Receta</th><th>Inputs</th><th>Outputs</th><th>Nivel</th><th>Rango</th><th>XP</th><th>Costo base</th><th>Accion</th></tr>
             </thead>
             <tbody>
                 ${
@@ -686,6 +815,7 @@ function renderProcessing() {
                                         <td>${recipe.requiredLevel}</td>
                                         <td>${recipe.requiredRankWeight}</td>
                                         <td>${recipe.xpGain}</td>
+                                        <td>${formatMoney(recipe.processFee || appState.staticData?.economy?.DefaultDrugProcessFee || 0)}</td>
                                         <td>
                                             <button class="tiny primary" data-click="process-recipe" data-recipe-id="${escapeHtml(
                                                 recipe.id
@@ -695,7 +825,7 @@ function renderProcessing() {
                                 `;
                               })
                               .join('')
-                        : '<tr><td colspan="7" class="muted">No hay recetas configuradas.</td></tr>'
+                        : '<tr><td colspan="8" class="muted">No hay recetas configuradas.</td></tr>'
                 }
             </tbody>
         </table>
@@ -717,7 +847,7 @@ function renderArmory() {
         <h2>Tienda de armas</h2>
         <table>
             <thead>
-                <tr><th>Item</th><th>Label</th><th>Nivel</th><th>Rango</th><th>Precio</th><th>XP</th><th>Accion</th></tr>
+                <tr><th>Item</th><th>Label</th><th>Nivel</th><th>Rango</th><th>Precio base</th><th>XP</th><th>Accion</th></tr>
             </thead>
             <tbody>
                 ${
@@ -808,6 +938,60 @@ function renderInvites() {
     `;
 }
 
+function formatLogDetails(details) {
+    if (!details) return '-';
+    try {
+        const serialized = JSON.stringify(details);
+        return serialized.length > 160 ? `${serialized.slice(0, 160)}...` : serialized;
+    } catch (error) {
+        return String(details);
+    }
+}
+
+function renderLogs() {
+    const target = document.getElementById('tab-logs');
+    if (!isMember()) {
+        target.innerHTML = '<p class="muted">Debes pertenecer a una organizacion.</p>';
+        return;
+    }
+
+    const logs = appState.data?.logs || [];
+    if (!logs.length) {
+        target.innerHTML = '<p class="muted">No hay logs visibles para tu rango.</p>';
+        return;
+    }
+
+    target.innerHTML = `
+        <h2>Historial de organizacion</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Fecha</th>
+                    <th>Actor</th>
+                    <th>Accion</th>
+                    <th>Detalles</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${logs
+                    .map((entry) => {
+                        return `
+                            <tr>
+                                <td>${entry.id}</td>
+                                <td>${escapeHtml(formatDate(entry.created_at))}</td>
+                                <td>${escapeHtml(entry.actor_name || entry.actor_identifier || '-')}</td>
+                                <td>${escapeHtml(entry.action || '-')}</td>
+                                <td class="code">${escapeHtml(formatLogDetails(entry.details))}</td>
+                            </tr>
+                        `;
+                    })
+                    .join('')}
+            </tbody>
+        </table>
+    `;
+}
+
 function renderAll() {
     if (!appState.data) return;
 
@@ -828,6 +1012,7 @@ function renderAll() {
     renderProcessing();
     renderArmory();
     renderInvites();
+    renderLogs();
     setTab(appState.route);
 }
 
@@ -844,6 +1029,7 @@ function applySyncLite(sync) {
         appState.data.ranks = [];
         appState.data.assets = [];
         appState.data.orgInvites = [];
+        appState.data.logs = [];
     }
 
     renderAll();
@@ -864,6 +1050,11 @@ async function performAction(action, payload, customContext) {
 
         if (response?.sync) {
             applySyncLite(response.sync);
+        }
+
+        if (Array.isArray(response?.draftPoints)) {
+            appState.createDraftPoints = response.draftPoints;
+            renderAll();
         }
 
         setStatus(response?.message || 'Accion ejecutada.', response?.ok === true);
@@ -900,6 +1091,34 @@ async function handleClick(event) {
         return;
     }
 
+    if (action === 'capture-create-point') {
+        const pointType = document.getElementById('create-point-type')?.value || '';
+        await performAction('captureCreatePoint', { pointType });
+        return;
+    }
+
+    if (action === 'add-manual-create-point') {
+        const pointType = document.getElementById('create-point-type')?.value || '';
+        const x = Number(document.getElementById('create-point-x')?.value || NaN);
+        const y = Number(document.getElementById('create-point-y')?.value || NaN);
+        const z = Number(document.getElementById('create-point-z')?.value || NaN);
+        const heading = Number(document.getElementById('create-point-h')?.value || 0);
+        const radius = Number(document.getElementById('create-point-r')?.value || 2.0);
+        await performAction('addCreatePointManual', { pointType, x, y, z, heading, radius });
+        return;
+    }
+
+    if (action === 'remove-create-point') {
+        const index = Number(button.getAttribute('data-index'));
+        await performAction('removeCreatePointDraft', { index });
+        return;
+    }
+
+    if (action === 'clear-create-points') {
+        await performAction('clearCreatePointDraft', {});
+        return;
+    }
+
     if (action === 'deposit-funds') {
         const amount = Number(document.getElementById('funds-amount')?.value || 0);
         await performAction('depositFunds', { amount });
@@ -909,6 +1128,24 @@ async function handleClick(event) {
     if (action === 'withdraw-funds') {
         const amount = Number(document.getElementById('funds-amount')?.value || 0);
         await performAction('withdrawFunds', { amount });
+        return;
+    }
+
+    if (action === 'transfer-ownership') {
+        const identifier = document.getElementById('transfer-owner-identifier')?.value || '';
+        const confirmation = window.confirm('Seguro que deseas transferir el liderazgo?');
+        if (confirmation) {
+            await performAction('transferOwnership', { identifier });
+        }
+        return;
+    }
+
+    if (action === 'transfer-ownership-inline') {
+        const identifier = decodeURIComponent(button.getAttribute('data-identifier') || '');
+        const confirmation = window.confirm(`Transferir liderazgo a ${identifier}?`);
+        if (confirmation) {
+            await performAction('transferOwnership', { identifier });
+        }
         return;
     }
 
@@ -1008,16 +1245,24 @@ async function handleClick(event) {
     }
 
     if (action === 'set-point') {
+        const pointType = document.getElementById('point-new-type')?.value || '';
+        const radius = Number(document.getElementById('point-new-radius')?.value || 0);
+        await performAction('setPointHere', { pointType, radius: radius > 0 ? radius : undefined });
+        return;
+    }
+
+    if (action === 'move-point') {
+        const pointId = Number(button.getAttribute('data-point-id'));
         const pointType = button.getAttribute('data-point-type') || '';
-        await performAction('setPointHere', { pointType });
+        await performAction('setPointHere', { pointId, pointType });
         return;
     }
 
     if (action === 'delete-point') {
-        const pointType = button.getAttribute('data-point-type') || '';
-        const confirmation = window.confirm(`Eliminar punto ${pointType}?`);
+        const pointId = Number(button.getAttribute('data-point-id'));
+        const confirmation = window.confirm(`Eliminar punto ID ${pointId}?`);
         if (confirmation) {
-            await performAction('deletePoint', { pointType });
+            await performAction('deletePoint', { pointId });
         }
         return;
     }
@@ -1043,6 +1288,16 @@ async function handleClick(event) {
     if (action === 'start-mission') {
         const missionId = button.getAttribute('data-mission-id') || '';
         await performAction('startMission', { missionId });
+        return;
+    }
+
+    if (action === 'join-mission') {
+        await performAction('joinMission', {});
+        return;
+    }
+
+    if (action === 'leave-mission') {
+        await performAction('leaveMission', {});
         return;
     }
 
@@ -1075,7 +1330,6 @@ async function handleClick(event) {
         const token = window.prompt("Para confirmar escribe EXACTO: CONFIRMAR");
         if (token === null) return;
         await performAction('dissolveOrg', { confirmation: token });
-        return;
     }
 }
 
@@ -1089,6 +1343,7 @@ window.addEventListener('message', (event) => {
         appState.context = payload.context || {};
         appState.data = payload.data || {};
         appState.staticData = payload.static || {};
+        appState.createDraftPoints = payload.draftPoints || [];
 
         document.getElementById('app').classList.remove('hidden');
         renderAll();
@@ -1109,6 +1364,9 @@ window.addEventListener('message', (event) => {
     }
 
     if (payload.action === 'syncLite') {
+        if (Array.isArray(payload.draftPoints)) {
+            appState.createDraftPoints = payload.draftPoints;
+        }
         applySyncLite(payload.sync);
         return;
     }

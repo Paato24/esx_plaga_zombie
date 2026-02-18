@@ -4,8 +4,34 @@ local PlayerStates = {}
 local ActiveMissions = {}
 local LastActionAt = {}
 local LastInviteCleanupAt = 0
+local LoadedMissionPersistence = false
+local getPlayerState
 
 math.randomseed(os.time())
+
+local function runDbTransaction(steps)
+    if type(steps) ~= 'table' or #steps == 0 then
+        return true
+    end
+
+    if MySQL.transaction and MySQL.transaction.await then
+        local ok, result = pcall(function()
+            return MySQL.transaction.await(steps)
+        end)
+
+        if ok and result then
+            return true
+        end
+    end
+
+    local ok = pcall(function()
+        for _, step in ipairs(steps) do
+            MySQL.query.await(step.query, step.values or {})
+        end
+    end)
+
+    return ok
+end
 
 local function notify(source, message)
     TriggerClientEvent('esx:showNotification', source, message)
@@ -279,6 +305,70 @@ local function getLevelInfo(level, xp)
     }
 end
 
+local function getTodayDateKey()
+    return os.date('%Y-%m-%d')
+end
+
+local function getDailyUsageCount(orgId, usageKey)
+    return MySQL.scalar.await(
+        [[
+            SELECT usage_count
+            FROM org_daily_limits
+            WHERE org_id = ? AND usage_key = ? AND usage_date = CURDATE()
+            LIMIT 1
+        ]],
+        { orgId, usageKey }
+    ) or 0
+end
+
+local function consumeDailyUsage(orgId, usageKey, limit, increment)
+    local amount = math.max(1, tonumber(increment) or 1)
+    local maxAllowed = math.max(1, tonumber(limit) or 1)
+
+    MySQL.insert.await(
+        [[
+            INSERT IGNORE INTO org_daily_limits (org_id, usage_key, usage_date, usage_count)
+            VALUES (?, ?, CURDATE(), 0)
+        ]],
+        { orgId, usageKey }
+    )
+
+    local affected = MySQL.update.await(
+        [[
+            UPDATE org_daily_limits
+            SET usage_count = usage_count + ?, updated_at = NOW()
+            WHERE org_id = ?
+                AND usage_key = ?
+                AND usage_date = CURDATE()
+                AND usage_count + ? <= ?
+        ]],
+        { amount, orgId, usageKey, amount, maxAllowed }
+    )
+
+    return (affected or 0) > 0
+end
+
+local function calculateDynamicPrice(basePrice, orgLevel, usageCount, usageIncreasePerAction)
+    local price = math.max(1, math.floor(tonumber(basePrice) or 1))
+    if not Config.Economy.DynamicPricing then
+        return price
+    end
+
+    local level = math.max(1, tonumber(orgLevel) or 1)
+    local usedToday = math.max(0, tonumber(usageCount) or 0)
+
+    local rawDiscount = (level - 1) * (tonumber(Config.Economy.LevelDiscountPerLevel) or 0.0)
+    local discount = math.min(tonumber(Config.Economy.MaxLevelDiscount) or 0.0, rawDiscount)
+
+    local rawIncrease = usedToday * (tonumber(usageIncreasePerAction) or 0.0)
+    local increase = math.min(tonumber(Config.Economy.MaxUsageIncrease) or 0.0, rawIncrease)
+
+    local discounted = price * (1.0 - (discount / 100.0))
+    local adjusted = discounted * (1.0 + (increase / 100.0))
+
+    return math.max(1, math.floor(adjusted + 0.5))
+end
+
 local function cleanupExpiredInvitesIfNeeded()
     local now = os.time()
     if now - LastInviteCleanupAt < 60 then
@@ -469,6 +559,28 @@ local function fetchOrgAssets(orgId)
     return rows or {}
 end
 
+local function fetchOrgLogs(orgId, limit)
+    local maxRows = math.max(20, tonumber(limit) or Config.Logs.MaxRowsInNui or 120)
+    maxRows = math.min(maxRows, 300)
+
+    local rows = MySQL.query.await(
+        [[
+            SELECT id, actor_identifier, actor_name, action, details, created_at
+            FROM org_logs
+            WHERE org_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+        ]],
+        { orgId, maxRows }
+    )
+
+    for _, row in ipairs(rows or {}) do
+        row.details = decodeJson(row.details)
+    end
+
+    return rows or {}
+end
+
 local function fetchPendingInvitesForPlayer(identifier)
     cleanupExpiredInvitesIfNeeded()
 
@@ -550,6 +662,186 @@ local function fetchMembershipByIdentifier(identifier)
     }
 end
 
+local function normalizeMissionParticipants(rawParticipants)
+    local participants = {}
+
+    if type(rawParticipants) ~= 'table' then
+        return participants
+    end
+
+    for key, value in pairs(rawParticipants) do
+        if type(key) == 'string' and key ~= '' then
+            participants[key] = type(value) == 'string' and value or key
+        elseif type(value) == 'string' and value ~= '' then
+            participants[value] = value
+        end
+    end
+
+    return participants
+end
+
+local function getMissionParticipantCount(missionData)
+    local total = 0
+    if not missionData or type(missionData.participants) ~= 'table' then
+        return 0
+    end
+
+    for _identifier, _name in pairs(missionData.participants) do
+        total = total + 1
+    end
+
+    return total
+end
+
+local function isMissionParticipant(missionData, identifier)
+    if not missionData or type(missionData.participants) ~= 'table' or not identifier then
+        return false
+    end
+
+    return missionData.participants[identifier] ~= nil
+end
+
+local function buildMissionPayloadForPlayer(missionData, identifier)
+    if not missionData then
+        return nil
+    end
+
+    local participants = normalizeMissionParticipants(missionData.participants)
+
+    return {
+        orgId = missionData.orgId,
+        missionId = missionData.missionId,
+        label = missionData.label,
+        target = deepCopy(missionData.target),
+        xpGain = missionData.xpGain,
+        orgFundsReward = missionData.orgFundsReward,
+        playerMoneyReward = missionData.playerMoneyReward,
+        startedAt = missionData.startedAt,
+        startedByIdentifier = missionData.startedByIdentifier,
+        startedByName = missionData.startedByName,
+        participants = participants,
+        participantsCount = getMissionParticipantCount({
+            participants = participants
+        }),
+        isParticipant = isMissionParticipant({
+            participants = participants
+        }, identifier)
+    }
+end
+
+local function persistMissionForOrg(orgId)
+    local missionData = ActiveMissions[orgId]
+    if not missionData then
+        MySQL.update.await('DELETE FROM org_active_missions WHERE org_id = ?', { orgId })
+        return
+    end
+
+    MySQL.query.await(
+        [[
+            INSERT INTO org_active_missions (
+                org_id,
+                mission_id,
+                label,
+                target,
+                participants,
+                xp_gain,
+                org_funds_reward,
+                player_money_reward,
+                started_at,
+                started_by_identifier,
+                started_by_name
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?)
+            ON DUPLICATE KEY UPDATE
+                mission_id = VALUES(mission_id),
+                label = VALUES(label),
+                target = VALUES(target),
+                participants = VALUES(participants),
+                xp_gain = VALUES(xp_gain),
+                org_funds_reward = VALUES(org_funds_reward),
+                player_money_reward = VALUES(player_money_reward),
+                started_at = VALUES(started_at),
+                started_by_identifier = VALUES(started_by_identifier),
+                started_by_name = VALUES(started_by_name),
+                updated_at = CURRENT_TIMESTAMP
+        ]],
+        {
+            orgId,
+            missionData.missionId,
+            missionData.label,
+            encodeJson(missionData.target),
+            encodeJson(normalizeMissionParticipants(missionData.participants)),
+            missionData.xpGain or 0,
+            missionData.orgFundsReward or 0,
+            missionData.playerMoneyReward or 0,
+            missionData.startedAt or os.time(),
+            missionData.startedByIdentifier or 'unknown',
+            missionData.startedByName or 'unknown'
+        }
+    )
+end
+
+local function clearMissionForOrg(orgId)
+    ActiveMissions[orgId] = nil
+    MySQL.update.await('DELETE FROM org_active_missions WHERE org_id = ?', { orgId })
+end
+
+local function broadcastMissionStateForOrg(orgId)
+    local missionData = ActiveMissions[orgId]
+
+    for _, playerId in ipairs(GetPlayers()) do
+        local sourcePlayer = tonumber(playerId)
+        local state = getPlayerState(sourcePlayer)
+        if state and state.orgId == orgId then
+            TriggerClientEvent(
+                'esx_orgs:client:setActiveMission',
+                sourcePlayer,
+                buildMissionPayloadForPlayer(missionData, state.identifier)
+            )
+        end
+    end
+end
+
+local function loadPersistedMissions()
+    ActiveMissions = {}
+
+    local rows = MySQL.query.await(
+        [[
+            SELECT
+                org_id,
+                mission_id,
+                label,
+                target,
+                participants,
+                xp_gain,
+                org_funds_reward,
+                player_money_reward,
+                UNIX_TIMESTAMP(started_at) AS started_at_ts,
+                started_by_identifier,
+                started_by_name
+            FROM org_active_missions
+        ]]
+    )
+
+    for _, row in ipairs(rows or {}) do
+        ActiveMissions[row.org_id] = {
+            orgId = row.org_id,
+            missionId = row.mission_id,
+            label = row.label,
+            target = decodeJson(row.target),
+            participants = normalizeMissionParticipants(decodeJson(row.participants)),
+            xpGain = tonumber(row.xp_gain) or 0,
+            orgFundsReward = tonumber(row.org_funds_reward) or 0,
+            playerMoneyReward = tonumber(row.player_money_reward) or 0,
+            startedAt = tonumber(row.started_at_ts) or os.time(),
+            startedByIdentifier = row.started_by_identifier,
+            startedByName = row.started_by_name
+        }
+    end
+
+    LoadedMissionPersistence = true
+end
+
 local function loadPlayerState(source)
     local xPlayer = ESX.GetPlayerFromId(source)
     if not xPlayer then
@@ -614,7 +906,7 @@ local function loadPlayerState(source)
     return resolvedState
 end
 
-local function getPlayerState(source)
+getPlayerState = function(source)
     if PlayerStates[source] then
         return PlayerStates[source]
     end
@@ -660,7 +952,7 @@ local function buildSyncPayload(source, forceReload)
         membership = buildMembershipPayload(state),
         points = {},
         pendingInvites = fetchPendingInvitesForPlayer(state.identifier),
-        activeMission = ActiveMissions[source]
+        activeMission = state.orgId and buildMissionPayloadForPlayer(ActiveMissions[state.orgId], state.identifier) or nil
     }
 
     if state.orgId then
@@ -766,9 +1058,10 @@ local function buildAppData(source)
         ranks = {},
         points = {},
         assets = {},
+        logs = {},
         orgInvites = {},
         pendingInvites = fetchPendingInvitesForPlayer(state.identifier),
-        activeMission = ActiveMissions[source],
+        activeMission = nil,
         createOptions = buildCreateOptionsPayload()
     }
 
@@ -801,9 +1094,16 @@ local function buildAppData(source)
             response.ranks = fetchOrgRanks(org.id)
             response.points = fetchOrgPoints(org.id)
             response.assets = fetchOrgAssets(org.id)
+            response.activeMission = buildMissionPayloadForPlayer(ActiveMissions[org.id], state.identifier)
 
             if hasPermission(state, 'manage_invites') then
                 response.orgInvites = fetchPendingInvitesForOrg(org.id)
+            end
+
+            if hasPermission(state, 'manage_org') then
+                response.logs = fetchOrgLogs(org.id, Config.Logs.MaxRowsInNui)
+            else
+                response.logs = {}
             end
         end
     end
@@ -939,6 +1239,100 @@ local function addOrgXp(orgId, amount, reason, actorIdentifier, actorName)
     }
 end
 
+local function buildDefaultPointEntries(baseCoords)
+    local entries = {}
+
+    for pointType, offset in pairs(Config.DefaultPointOffsets) do
+        local pointConfig = Config.PointTypes[pointType]
+        if pointConfig then
+            entries[#entries + 1] = {
+                pointType = pointType,
+                label = pointConfig.label,
+                x = baseCoords.x + (offset.x or 0.0),
+                y = baseCoords.y + (offset.y or 0.0),
+                z = baseCoords.z + (offset.z or 0.0),
+                heading = (baseCoords.heading or 0.0) + (offset.heading or 0.0),
+                radius = pointConfig.radius or 2.0
+            }
+        end
+    end
+
+    return entries
+end
+
+local function buildCreationPointEntries(markerCoords, customPoints)
+    local defaults = buildDefaultPointEntries(markerCoords)
+    if not Config.CreationPointCustomization.Enabled then
+        return defaults
+    end
+
+    local maxCustomPoints = math.max(1, tonumber(Config.CreationPointCustomization.MaxCustomPoints) or 30)
+    local maxDistance = tonumber(Config.CreationPointCustomization.MaxDistanceFromCreationMarker) or 300.0
+    local allowMultiple = Config.CreationPointCustomization.AllowMultiplePerType == true
+
+    local entries = {}
+    local typeCount = {}
+
+    if type(customPoints) == 'table' then
+        for _, item in ipairs(customPoints) do
+            if #entries >= maxCustomPoints then
+                break
+            end
+
+            local pointType = trim(item.pointType)
+            local pointConfig = Config.PointTypes[pointType]
+            local coords = type(item.coords) == 'table' and item.coords or {}
+            local x = tonumber(coords.x)
+            local y = tonumber(coords.y)
+            local z = tonumber(coords.z)
+            local heading = tonumber(item.heading) or 0.0
+            local radius = tonumber(item.radius) or tonumber(pointConfig and pointConfig.radius) or 2.0
+
+            if pointConfig and x and y and z then
+                local dist = distanceBetween(markerCoords, { x = x, y = y, z = z })
+                if dist <= maxDistance then
+                    typeCount[pointType] = (typeCount[pointType] or 0) + 1
+                    if allowMultiple or typeCount[pointType] == 1 then
+                        entries[#entries + 1] = {
+                            pointType = pointType,
+                            label = pointConfig.label,
+                            x = x,
+                            y = y,
+                            z = z,
+                            heading = heading,
+                            radius = math.max(1.5, math.min(5.0, radius))
+                        }
+                    end
+                end
+            end
+        end
+    end
+
+    if #entries == 0 then
+        return defaults
+    end
+
+    local hasType = {}
+    for _, entry in ipairs(entries) do
+        hasType[entry.pointType] = true
+    end
+
+    local required = Config.CreationPointCustomization.RequiredPointTypes or {}
+    for _, requiredType in ipairs(required) do
+        if not hasType[requiredType] then
+            for _, defaultEntry in ipairs(defaults) do
+                if defaultEntry.pointType == requiredType then
+                    entries[#entries + 1] = deepCopy(defaultEntry)
+                    hasType[requiredType] = true
+                    break
+                end
+            end
+        end
+    end
+
+    return entries
+end
+
 local function actionCreateOrganization(source, payload, context)
     if not enforceActionCooldown(source, 'create_org', 1500) then
         return {
@@ -1030,96 +1424,98 @@ local function actionCreateOrganization(source, payload, context)
         return { ok = false, message = 'No se pudo crear la organizacion.' }
     end
 
-    local bossRankId = nil
-    local bossRankWeight = -1
+    local rankDefinitions = orgConfig.defaultRanks or {}
+    if #rankDefinitions == 0 then
+        MySQL.update.await('DELETE FROM orgs WHERE id = ?', { orgId })
+        addPlayerMoney(xPlayer, Config.CreationMoneyAccount, orgConfig.createPrice)
+        return { ok = false, message = 'No se encontraron rangos por defecto.' }
+    end
 
-    for _, rankData in ipairs(orgConfig.defaultRanks or {}) do
-        local weight = tonumber(rankData.weight) or 0
-        local permissions = buildPermissionMap(rankData.permissions)
+    local pointsToCreate = buildCreationPointEntries(marker.coords, payload.customPoints)
+    if #pointsToCreate == 0 then
+        pointsToCreate = buildDefaultPointEntries(marker.coords)
+    end
 
-        local insertedRankId = MySQL.insert.await(
-            [[
+    local transactionSteps = {}
+
+    for _, rankData in ipairs(rankDefinitions) do
+        local rankWeight = tonumber(rankData.weight) or 0
+        local rankPermissions = buildPermissionMap(rankData.permissions)
+
+        transactionSteps[#transactionSteps + 1] = {
+            query = [[
                 INSERT INTO org_ranks (org_id, name, weight, permissions)
                 VALUES (?, ?, ?, ?)
             ]],
-            {
+            values = {
                 orgId,
                 rankData.name,
-                weight,
-                encodeJson(permissions)
+                rankWeight,
+                encodeJson(rankPermissions)
             }
-        )
-
-        if insertedRankId and weight > bossRankWeight then
-            bossRankId = insertedRankId
-            bossRankWeight = weight
-        end
+        }
     end
 
-    if not bossRankId then
-        MySQL.update.await('DELETE FROM orgs WHERE id = ?', { orgId })
-        addPlayerMoney(xPlayer, Config.CreationMoneyAccount, orgConfig.createPrice)
-        return { ok = false, message = 'No se pudieron crear los rangos base.' }
-    end
-
-    MySQL.insert.await(
-        [[
+    transactionSteps[#transactionSteps + 1] = {
+        query = [[
             INSERT INTO org_members (org_id, identifier, name, rank_id)
-            VALUES (?, ?, ?, ?)
+            VALUES (
+                ?,
+                ?,
+                ?,
+                (SELECT id FROM org_ranks WHERE org_id = ? ORDER BY weight DESC, id ASC LIMIT 1)
+            )
         ]],
-        {
+        values = {
             orgId,
             state.identifier,
             state.playerName,
-            bossRankId
+            orgId
         }
-    )
+    }
 
-    local baseCoords = marker.coords
-    for pointType, offset in pairs(Config.DefaultPointOffsets) do
-        local pointConfig = Config.PointTypes[pointType]
-        if pointConfig then
-            local heading = (baseCoords.heading or 0.0) + (offset.heading or 0.0)
+    for _, pointEntry in ipairs(pointsToCreate) do
+        transactionSteps[#transactionSteps + 1] = {
+            query = [[
+                INSERT INTO org_points (org_id, point_type, label, x, y, z, heading, radius, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ]],
+            values = {
+                orgId,
+                pointEntry.pointType,
+                pointEntry.label,
+                pointEntry.x,
+                pointEntry.y,
+                pointEntry.z,
+                pointEntry.heading or 0.0,
+                pointEntry.radius or 2.0,
+                encodeJson({})
+            }
+        }
+    end
 
-            MySQL.query.await(
-                [[
-                    INSERT INTO org_points (org_id, point_type, label, x, y, z, heading, radius, metadata)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON DUPLICATE KEY UPDATE
-                        label = VALUES(label),
-                        x = VALUES(x),
-                        y = VALUES(y),
-                        z = VALUES(z),
-                        heading = VALUES(heading),
-                        radius = VALUES(radius),
-                        metadata = VALUES(metadata)
-                ]],
-                {
-                    orgId,
-                    pointType,
-                    pointConfig.label,
-                    baseCoords.x + (offset.x or 0.0),
-                    baseCoords.y + (offset.y or 0.0),
-                    baseCoords.z + (offset.z or 0.0),
-                    heading,
-                    pointConfig.radius or 2.0,
-                    encodeJson({})
-                }
-            )
-        end
+    transactionSteps[#transactionSteps + 1] = {
+        query = "UPDATE org_invites SET status = 'expired' WHERE target_identifier = ? AND status = 'pending'",
+        values = { state.identifier }
+    }
+
+    local transactionOk = runDbTransaction(transactionSteps)
+    if not transactionOk then
+        MySQL.update.await('DELETE FROM org_members WHERE org_id = ?', { orgId })
+        MySQL.update.await('DELETE FROM org_ranks WHERE org_id = ?', { orgId })
+        MySQL.update.await('DELETE FROM org_points WHERE org_id = ?', { orgId })
+        MySQL.update.await('DELETE FROM orgs WHERE id = ?', { orgId })
+        addPlayerMoney(xPlayer, Config.CreationMoneyAccount, orgConfig.createPrice)
+        return { ok = false, message = 'No se pudieron crear los datos de la organizacion.' }
     end
 
     registerOrgStash(orgId, orgName)
 
-    MySQL.update.await(
-        "UPDATE org_invites SET status = 'expired' WHERE target_identifier = ? AND status = 'pending'",
-        { state.identifier }
-    )
-
     addLog(orgId, state.identifier, state.playerName, 'org_created', {
         orgType = orgType,
         orgName = orgName,
-        orgTag = tag
+        orgTag = tag,
+        initialPoints = #pointsToCreate
     })
 
     pushSync(source, true)
@@ -1593,9 +1989,19 @@ local function actionKickMember(source, payload, context)
         targetIdentifier = targetIdentifier
     })
 
+    local activeMission = ActiveMissions[state.orgId]
+    if activeMission and type(activeMission.participants) == 'table' then
+        activeMission.participants[targetIdentifier] = nil
+        if getMissionParticipantCount(activeMission) <= 0 then
+            clearMissionForOrg(state.orgId)
+        else
+            persistMissionForOrg(state.orgId)
+        end
+        broadcastMissionStateForOrg(state.orgId)
+    end
+
     local targetSource = getSourceByIdentifier(targetIdentifier)
     if targetSource then
-        ActiveMissions[targetSource] = nil
         TriggerClientEvent('esx_orgs:client:setActiveMission', targetSource, nil)
         pushSync(targetSource, true)
         notify(targetSource, 'Has sido expulsado de la organizacion.')
@@ -1806,31 +2212,64 @@ local function actionSetPointHere(source, payload, context)
     local radius = tonumber(payload.radius) or tonumber(pointConfig.radius) or 2.0
     radius = math.max(1.5, math.min(5.0, radius))
 
-    MySQL.query.await(
-        [[
-            INSERT INTO org_points (org_id, point_type, label, x, y, z, heading, radius, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON DUPLICATE KEY UPDATE
-                label = VALUES(label),
-                x = VALUES(x),
-                y = VALUES(y),
-                z = VALUES(z),
-                heading = VALUES(heading),
-                radius = VALUES(radius),
-                metadata = VALUES(metadata)
-        ]],
-        {
-            state.orgId,
-            pointType,
-            pointConfig.label,
-            x,
-            y,
-            z,
-            heading,
-            radius,
-            encodeJson({})
-        }
-    )
+    local pointId = tonumber(payload.pointId)
+    if pointId then
+        local existingPoint = fetchOrgPointById(state.orgId, pointId)
+        if not existingPoint then
+            return { ok = false, message = 'El punto a mover no existe.' }
+        end
+
+        if existingPoint.point_type ~= pointType then
+            return { ok = false, message = 'No puedes cambiar el tipo al mover un punto.' }
+        end
+
+        MySQL.update.await(
+            [[
+                UPDATE org_points
+                SET x = ?, y = ?, z = ?, heading = ?, radius = ?, updated_at = NOW()
+                WHERE id = ? AND org_id = ?
+            ]],
+            {
+                x,
+                y,
+                z,
+                heading,
+                radius,
+                pointId,
+                state.orgId
+            }
+        )
+    else
+        local pointCount = MySQL.scalar.await(
+            'SELECT COUNT(*) FROM org_points WHERE org_id = ? AND point_type = ?',
+            { state.orgId, pointType }
+        ) or 0
+
+        if pointCount >= Config.MaxPointsPerType then
+            return {
+                ok = false,
+                message = ('Se alcanzo el maximo de %s puntos para ese tipo.'):format(Config.MaxPointsPerType)
+            }
+        end
+
+        MySQL.insert.await(
+            [[
+                INSERT INTO org_points (org_id, point_type, label, x, y, z, heading, radius, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ]],
+            {
+                state.orgId,
+                pointType,
+                pointConfig.label,
+                x,
+                y,
+                z,
+                heading,
+                radius,
+                encodeJson({})
+            }
+        )
+    end
 
     if pointType == 'inventory' then
         registerOrgStash(state.orgId, state.orgName)
@@ -1847,7 +2286,7 @@ local function actionSetPointHere(source, payload, context)
 
     return {
         ok = true,
-        message = ('Punto %s actualizado.'):format(pointConfig.label),
+        message = ('Punto %s guardado.'):format(pointConfig.label),
         refresh = true
     }
 end
@@ -1858,57 +2297,38 @@ local function actionDeletePoint(source, payload, context)
         return { ok = false, message = err }
     end
 
-    local pointType = trim(payload.pointType)
-    if not Config.PointTypes[pointType] then
-        return { ok = false, message = 'Tipo de punto invalido.' }
+    local pointId = tonumber(payload.pointId)
+    if not pointId then
+        return { ok = false, message = 'Debes indicar un pointId valido.' }
     end
 
-    if pointType == 'boss' then
-        local hasOrganizationPoint = MySQL.single.await(
-            [[
-                SELECT id
-                FROM org_points
-                WHERE org_id = ? AND point_type = 'organization'
-                LIMIT 1
-            ]],
-            { state.orgId }
-        )
-        if not hasOrganizationPoint then
+    local point = fetchOrgPointById(state.orgId, pointId)
+    if not point then
+        return { ok = false, message = 'Punto no encontrado.' }
+    end
+
+    local pointType = point.point_type
+    if pointType == 'boss' or pointType == 'organization' then
+        local remainingCount = MySQL.scalar.await(
+            'SELECT COUNT(*) FROM org_points WHERE org_id = ? AND point_type = ?',
+            { state.orgId, pointType }
+        ) or 0
+
+        if remainingCount <= 1 then
             return {
                 ok = false,
-                message = 'No puedes borrar el punto jefe si no existe punto organizacion.'
-            }
-        end
-    elseif pointType == 'organization' then
-        local hasBossPoint = MySQL.single.await(
-            [[
-                SELECT id
-                FROM org_points
-                WHERE org_id = ? AND point_type = 'boss'
-                LIMIT 1
-            ]],
-            { state.orgId }
-        )
-        if not hasBossPoint then
-            return {
-                ok = false,
-                message = 'No puedes borrar el punto organizacion si no existe punto jefe.'
+                message = ('Debe quedar al menos un punto de tipo %s.'):format(pointType)
             }
         end
     end
 
-    MySQL.update.await(
-        [[
-            DELETE FROM org_points
-            WHERE org_id = ? AND point_type = ?
-        ]],
-        {
-            state.orgId,
-            pointType
-        }
-    )
+    MySQL.update.await('DELETE FROM org_points WHERE org_id = ? AND id = ?', {
+        state.orgId,
+        pointId
+    })
 
     addLog(state.orgId, state.identifier, state.playerName, 'point_deleted', {
+        pointId = pointId,
         pointType = pointType
     })
 
@@ -1951,9 +2371,17 @@ local function actionBuyAsset(source, payload, context)
         return { ok = false, message = 'Tu rango no puede comprar este activo.' }
     end
 
+    local usedToday = getDailyUsageCount(state.orgId, ('asset_%s_purchase'):format(assetType))
+    local finalPrice = calculateDynamicPrice(
+        catalogEntry.price,
+        state.orgLevel,
+        usedToday,
+        1.5
+    )
+
     local affected = MySQL.update.await(
         'UPDATE orgs SET funds = funds - ?, updated_at = NOW() WHERE id = ? AND funds >= ?',
-        { catalogEntry.price, state.orgId, catalogEntry.price }
+        { finalPrice, state.orgId, finalPrice }
     )
 
     if (affected or 0) < 1 then
@@ -1973,7 +2401,7 @@ local function actionBuyAsset(source, payload, context)
             catalogEntry.label,
             catalogEntry.requiredLevel or 1,
             catalogEntry.requiredRankWeight or 0,
-            catalogEntry.price,
+            finalPrice,
             plate,
             encodeJson({})
         }
@@ -1981,16 +2409,18 @@ local function actionBuyAsset(source, payload, context)
 
     if not insertedAsset then
         MySQL.update.await('UPDATE orgs SET funds = funds + ?, updated_at = NOW() WHERE id = ?', {
-            catalogEntry.price,
+            finalPrice,
             state.orgId
         })
         return { ok = false, message = 'No se pudo registrar el activo.' }
     end
 
+    consumeDailyUsage(state.orgId, ('asset_%s_purchase'):format(assetType), 5000, 1)
+
     addLog(state.orgId, state.identifier, state.playerName, 'asset_bought', {
         assetType = assetType,
         model = catalogEntry.model,
-        price = catalogEntry.price,
+        price = finalPrice,
         plate = plate
     })
 
@@ -1998,7 +2428,7 @@ local function actionBuyAsset(source, payload, context)
 
     return {
         ok = true,
-        message = ('Activo comprado: %s'):format(catalogEntry.label),
+        message = ('Activo comprado: %s ($%s)'):format(catalogEntry.label, finalPrice),
         refresh = true
     }
 end
@@ -2025,7 +2455,7 @@ local function actionSpawnAsset(source, payload, context)
 
     local asset = MySQL.single.await(
         [[
-            SELECT id, asset_type, model, label, required_level, required_rank_weight, plate, stored
+            SELECT id, asset_type, model, label, required_level, required_rank_weight, plate, stored, metadata
             FROM org_assets
             WHERE id = ? AND org_id = ?
             LIMIT 1
@@ -2048,6 +2478,9 @@ local function actionSpawnAsset(source, payload, context)
     if tonumber(asset.stored) ~= 1 then
         return { ok = false, message = 'Ese activo ya esta desplegado.' }
     end
+
+    local metadata = decodeJson(asset.metadata)
+    local vehicleData = metadata.vehicleData
 
     if state.orgLevel < (tonumber(asset.required_level) or 1) then
         return { ok = false, message = 'Tu organizacion no tiene nivel para este activo.' }
@@ -2093,6 +2526,9 @@ local function actionSpawnAsset(source, payload, context)
             model = asset.model,
             label = asset.label,
             plate = asset.plate,
+            vehicleData = vehicleData,
+            grantKeys = Config.VehicleKeys.Enabled == true,
+            vehicleKeysEvent = Config.VehicleKeys.ClientEvent,
             coords = {
                 x = spawnX,
                 y = spawnY,
@@ -2126,7 +2562,7 @@ local function actionStoreCurrentAsset(source, payload, context)
     local expectedAssetType = expectedPointType == 'hangar' and 'aircraft' or 'vehicle'
     local asset = MySQL.single.await(
         [[
-            SELECT id, stored
+            SELECT id, stored, metadata
             FROM org_assets
             WHERE org_id = ? AND plate = ? AND asset_type = ?
             LIMIT 1
@@ -2142,13 +2578,17 @@ local function actionStoreCurrentAsset(source, payload, context)
         return { ok = false, message = 'Ese activo ya estaba guardado.' }
     end
 
+    local metadata = decodeJson(asset.metadata)
+    metadata.vehicleData = type(payload.vehicleData) == 'table' and payload.vehicleData or metadata.vehicleData
+    metadata.lastStoredAt = os.time()
+
     MySQL.update.await(
         [[
             UPDATE org_assets
-            SET stored = 1, updated_at = NOW()
+            SET stored = 1, metadata = ?, updated_at = NOW()
             WHERE id = ? AND org_id = ?
         ]],
-        { asset.id, state.orgId }
+        { encodeJson(metadata), asset.id, state.orgId }
     )
 
     addLog(state.orgId, state.identifier, state.playerName, 'asset_stored', {
@@ -2172,8 +2612,9 @@ local function actionStartMission(source, payload, context)
         return { ok = false, message = err }
     end
 
-    if ActiveMissions[source] then
-        return { ok = false, message = 'Ya tienes una mision activa.' }
+    local existingMission = ActiveMissions[state.orgId]
+    if existingMission then
+        return { ok = false, message = Config.Messages.missionAlreadyActive }
     end
 
     local mission = getMissionById(trim(payload.missionId))
@@ -2214,7 +2655,7 @@ local function actionStartMission(source, payload, context)
     end
 
     local selectedTarget = mission.targets[math.random(1, #mission.targets)]
-    ActiveMissions[source] = {
+    ActiveMissions[state.orgId] = {
         orgId = state.orgId,
         missionId = mission.id,
         label = mission.label,
@@ -2222,8 +2663,15 @@ local function actionStartMission(source, payload, context)
         xpGain = mission.xpGain or 0,
         orgFundsReward = mission.orgFundsReward or 0,
         playerMoneyReward = mission.playerMoneyReward or 0,
-        startedAt = os.time()
+        startedAt = os.time(),
+        startedByIdentifier = state.identifier,
+        startedByName = state.playerName,
+        participants = {
+            [state.identifier] = state.playerName
+        }
     }
+
+    persistMissionForOrg(state.orgId)
 
     MySQL.query.await(
         [[
@@ -2244,7 +2692,8 @@ local function actionStartMission(source, payload, context)
         missionId = mission.id
     })
 
-    TriggerClientEvent('esx_orgs:client:setActiveMission', source, ActiveMissions[source])
+    broadcastMissionStateForOrg(state.orgId)
+    refreshOrgOnlineMembers(state.orgId)
 
     return {
         ok = true,
@@ -2253,18 +2702,107 @@ local function actionStartMission(source, payload, context)
     }
 end
 
-local function actionCancelMission(source)
-    local state = getPlayerState(source)
-    if not state or not state.orgId then
-        return { ok = false, message = Config.Messages.onlyOrgMembers }
+local function actionJoinMission(source, payload, context)
+    local state, _, err = validateActionPoint(source, context, { 'mission' }, 'use_missions')
+    if not state then
+        return { ok = false, message = err }
     end
 
-    if not ActiveMissions[source] then
+    local activeMission = ActiveMissions[state.orgId]
+    if not activeMission then
         return { ok = false, message = Config.Messages.missionNoActive }
     end
 
-    ActiveMissions[source] = nil
-    TriggerClientEvent('esx_orgs:client:setActiveMission', source, nil)
+    activeMission.participants = normalizeMissionParticipants(activeMission.participants)
+    if activeMission.participants[state.identifier] then
+        return { ok = false, message = 'Ya estabas unido a la mision.' }
+    end
+
+    activeMission.participants[state.identifier] = state.playerName
+    persistMissionForOrg(state.orgId)
+    broadcastMissionStateForOrg(state.orgId)
+    refreshOrgOnlineMembers(state.orgId)
+
+    addLog(state.orgId, state.identifier, state.playerName, 'mission_joined', {
+        missionId = activeMission.missionId
+    })
+
+    return {
+        ok = true,
+        message = Config.Messages.missionJoined,
+        refresh = true
+    }
+end
+
+local function actionLeaveMission(source, payload, context)
+    local state, _, err = validateActionPoint(source, context, { 'mission' }, 'use_missions')
+    if not state then
+        return { ok = false, message = err }
+    end
+
+    local activeMission = ActiveMissions[state.orgId]
+    if not activeMission then
+        return { ok = false, message = Config.Messages.missionNoActive }
+    end
+
+    activeMission.participants = normalizeMissionParticipants(activeMission.participants)
+    if not activeMission.participants[state.identifier] then
+        return { ok = false, message = 'No estabas unido a la mision.' }
+    end
+
+    activeMission.participants[state.identifier] = nil
+
+    if getMissionParticipantCount(activeMission) <= 0 then
+        clearMissionForOrg(state.orgId)
+    else
+        persistMissionForOrg(state.orgId)
+    end
+
+    broadcastMissionStateForOrg(state.orgId)
+    refreshOrgOnlineMembers(state.orgId)
+
+    addLog(state.orgId, state.identifier, state.playerName, 'mission_left', {
+        missionId = activeMission.missionId
+    })
+
+    return {
+        ok = true,
+        message = Config.Messages.missionLeft,
+        refresh = true
+    }
+end
+
+local function actionCancelMission(source, payload, context)
+    local state, _, err = validateActionPoint(
+        source,
+        context,
+        { 'mission', 'boss', 'organization' },
+        nil
+    )
+    if not state then
+        return { ok = false, message = err }
+    end
+
+    local activeMission = ActiveMissions[state.orgId]
+    if not activeMission then
+        return { ok = false, message = Config.Messages.missionNoActive }
+    end
+
+    local canCancel = state.isOwner
+        or hasPermission(state, 'manage_org')
+        or activeMission.startedByIdentifier == state.identifier
+
+    if not canCancel then
+        return { ok = false, message = 'No puedes cancelar esta mision.' }
+    end
+
+    clearMissionForOrg(state.orgId)
+    broadcastMissionStateForOrg(state.orgId)
+    refreshOrgOnlineMembers(state.orgId)
+
+    addLog(state.orgId, state.identifier, state.playerName, 'mission_cancelled', {
+        missionId = activeMission.missionId
+    })
 
     return {
         ok = true,
@@ -2292,9 +2830,39 @@ local function actionProcessRecipe(source, payload, context)
         return { ok = false, message = 'Tu rango no puede usar esta receta.' }
     end
 
+    local usedToday = getDailyUsageCount(state.orgId, 'drug_process')
+    local dailyLimit = tonumber(Config.Economy.DailyLimits.drugProcesses) or 12
+    if usedToday >= dailyLimit then
+        return { ok = false, message = Config.Messages.dailyLimitReached }
+    end
+
+    local processFeeBase = tonumber(recipe.processFee) or tonumber(Config.Economy.DefaultDrugProcessFee) or 0
+    local processFee = calculateDynamicPrice(
+        processFeeBase,
+        state.orgLevel,
+        usedToday,
+        tonumber(Config.Economy.DrugUsageIncreasePerProcess) or 0.0
+    )
+
+    if processFee > 0 then
+        local affected = MySQL.update.await(
+            'UPDATE orgs SET funds = funds - ?, updated_at = NOW() WHERE id = ? AND funds >= ?',
+            { processFee, state.orgId, processFee }
+        )
+        if (affected or 0) < 1 then
+            return { ok = false, message = 'Fondos insuficientes en organizacion para procesar.' }
+        end
+    end
+
     for _, ingredient in ipairs(recipe.inputs or {}) do
         local hasCount = exports.ox_inventory:GetItemCount(source, ingredient.item) or 0
         if hasCount < ingredient.count then
+            if processFee > 0 then
+                MySQL.update.await(
+                    'UPDATE orgs SET funds = funds + ?, updated_at = NOW() WHERE id = ?',
+                    { processFee, state.orgId }
+                )
+            end
             return {
                 ok = false,
                 message = ('Falta %s x%s.'):format(ingredient.item, ingredient.count)
@@ -2305,6 +2873,12 @@ local function actionProcessRecipe(source, payload, context)
     for _, output in ipairs(recipe.outputs or {}) do
         local canCarry = exports.ox_inventory:CanCarryItem(source, output.item, output.count)
         if not canCarry then
+            if processFee > 0 then
+                MySQL.update.await(
+                    'UPDATE orgs SET funds = funds + ?, updated_at = NOW() WHERE id = ?',
+                    { processFee, state.orgId }
+                )
+            end
             return { ok = false, message = 'No tienes espacio suficiente en inventario.' }
         end
     end
@@ -2315,6 +2889,13 @@ local function actionProcessRecipe(source, payload, context)
         if not success then
             for _, rollback in ipairs(removed) do
                 exports.ox_inventory:AddItem(source, rollback.item, rollback.count)
+            end
+
+            if processFee > 0 then
+                MySQL.update.await(
+                    'UPDATE orgs SET funds = funds + ?, updated_at = NOW() WHERE id = ?',
+                    { processFee, state.orgId }
+                )
             end
 
             return { ok = false, message = 'No se pudieron consumir materiales.' }
@@ -2337,20 +2918,45 @@ local function actionProcessRecipe(source, payload, context)
                 exports.ox_inventory:AddItem(source, rollback.item, rollback.count)
             end
 
+            if processFee > 0 then
+                MySQL.update.await(
+                    'UPDATE orgs SET funds = funds + ?, updated_at = NOW() WHERE id = ?',
+                    { processFee, state.orgId }
+                )
+            end
+
             return { ok = false, message = 'No se pudieron entregar los productos finales.' }
         end
     end
 
+    local usageConsumed = consumeDailyUsage(state.orgId, 'drug_process', dailyLimit, 1)
+    if not usageConsumed then
+        for _, rollback in ipairs(recipe.outputs or {}) do
+            exports.ox_inventory:RemoveItem(source, rollback.item, rollback.count)
+        end
+        for _, rollback in ipairs(removed) do
+            exports.ox_inventory:AddItem(source, rollback.item, rollback.count)
+        end
+        if processFee > 0 then
+            MySQL.update.await(
+                'UPDATE orgs SET funds = funds + ?, updated_at = NOW() WHERE id = ?',
+                { processFee, state.orgId }
+            )
+        end
+        return { ok = false, message = Config.Messages.dailyLimitReached }
+    end
+
     addOrgXp(state.orgId, recipe.xpGain or 0, 'drug_recipe', state.identifier, state.playerName)
     addLog(state.orgId, state.identifier, state.playerName, 'recipe_processed', {
-        recipeId = recipe.id
+        recipeId = recipe.id,
+        processFee = processFee
     })
 
     refreshOrgOnlineMembers(state.orgId)
 
     return {
         ok = true,
-        message = Config.Messages.recipeDone,
+        message = ('%s (costo org: $%s)'):format(Config.Messages.recipeDone, processFee),
         refresh = true
     }
 end
@@ -2378,9 +2984,22 @@ local function actionBuyWeapon(source, payload, context)
         return { ok = false, message = 'No tienes espacio en inventario.' }
     end
 
+    local usedToday = getDailyUsageCount(state.orgId, 'weapon_purchase')
+    local dailyLimit = tonumber(Config.Economy.DailyLimits.weaponPurchases) or 8
+    if usedToday >= dailyLimit then
+        return { ok = false, message = Config.Messages.dailyLimitReached }
+    end
+
+    local finalPrice = calculateDynamicPrice(
+        weapon.price,
+        state.orgLevel,
+        usedToday,
+        tonumber(Config.Economy.WeaponUsageIncreasePerPurchase) or 0.0
+    )
+
     local affected = MySQL.update.await(
         'UPDATE orgs SET funds = funds - ?, updated_at = NOW() WHERE id = ? AND funds >= ?',
-        { weapon.price, state.orgId, weapon.price }
+        { finalPrice, state.orgId, finalPrice }
     )
 
     if (affected or 0) < 1 then
@@ -2399,22 +3018,105 @@ local function actionBuyWeapon(source, payload, context)
     if not added then
         MySQL.update.await(
             'UPDATE orgs SET funds = funds + ?, updated_at = NOW() WHERE id = ?',
-            { weapon.price, state.orgId }
+            { finalPrice, state.orgId }
         )
         return { ok = false, message = 'No se pudo entregar el item.' }
+    end
+
+    local usageConsumed = consumeDailyUsage(state.orgId, 'weapon_purchase', dailyLimit, 1)
+    if not usageConsumed then
+        exports.ox_inventory:RemoveItem(source, weapon.item, 1)
+        MySQL.update.await(
+            'UPDATE orgs SET funds = funds + ?, updated_at = NOW() WHERE id = ?',
+            { finalPrice, state.orgId }
+        )
+        return { ok = false, message = Config.Messages.dailyLimitReached }
     end
 
     addOrgXp(state.orgId, weapon.xpGain or 0, 'weapon_shop', state.identifier, state.playerName)
     addLog(state.orgId, state.identifier, state.playerName, 'weapon_bought', {
         item = weapon.item,
-        price = weapon.price
+        price = finalPrice
     })
 
     refreshOrgOnlineMembers(state.orgId)
 
     return {
         ok = true,
-        message = Config.Messages.weaponBought,
+        message = ('%s (costo: $%s)'):format(Config.Messages.weaponBought, finalPrice),
+        refresh = true
+    }
+end
+
+local function actionTransferOwnership(source, payload, context)
+    local state, _, err = validateActionPoint(source, context, { 'boss', 'organization' }, 'manage_org')
+    if not state then
+        return { ok = false, message = err }
+    end
+
+    if not state.isOwner then
+        return { ok = false, message = 'Solo el lider actual puede transferir el liderazgo.' }
+    end
+
+    local targetIdentifier = trim(payload.identifier)
+    if targetIdentifier == '' then
+        return { ok = false, message = 'Miembro invalido para transferir liderazgo.' }
+    end
+
+    if targetIdentifier == state.identifier then
+        return { ok = false, message = 'Ya eres el lider actual.' }
+    end
+
+    local targetMember = fetchMemberWithRank(state.orgId, targetIdentifier)
+    if not targetMember then
+        return { ok = false, message = 'Ese miembro no pertenece a tu organizacion.' }
+    end
+
+    local topRank = MySQL.single.await(
+        [[
+            SELECT id, weight
+            FROM org_ranks
+            WHERE org_id = ?
+            ORDER BY weight DESC, id ASC
+            LIMIT 1
+        ]],
+        { state.orgId }
+    )
+
+    if not topRank then
+        return { ok = false, message = 'No se pudo resolver el rango principal.' }
+    end
+
+    local transferSteps = {
+        {
+            query = 'UPDATE orgs SET owner_identifier = ?, updated_at = NOW() WHERE id = ?',
+            values = { targetIdentifier, state.orgId }
+        },
+        {
+            query = 'UPDATE org_members SET rank_id = ? WHERE org_id = ? AND identifier = ?',
+            values = { topRank.id, state.orgId, targetIdentifier }
+        }
+    }
+
+    local transferOk = runDbTransaction(transferSteps)
+    if not transferOk then
+        return { ok = false, message = 'No se pudo transferir el liderazgo.' }
+    end
+
+    addLog(state.orgId, state.identifier, state.playerName, 'ownership_transferred', {
+        toIdentifier = targetIdentifier
+    })
+
+    local targetSource = getSourceByIdentifier(targetIdentifier)
+    if targetSource then
+        notify(targetSource, 'Ahora eres el lider de la organizacion.')
+    end
+
+    refreshOrgOnlineMembers(state.orgId)
+
+    return {
+        ok = true,
+        message = Config.Messages.ownershipTransferred,
         refresh = true
     }
 end
@@ -2438,12 +3140,22 @@ local function actionLeaveOrganization(source)
         { oldOrgId, state.identifier }
     )
 
-    ActiveMissions[source] = nil
+    local activeMission = ActiveMissions[oldOrgId]
+    if activeMission and type(activeMission.participants) == 'table' then
+        activeMission.participants[state.identifier] = nil
+        if getMissionParticipantCount(activeMission) <= 0 then
+            clearMissionForOrg(oldOrgId)
+        else
+            persistMissionForOrg(oldOrgId)
+        end
+    end
+
     TriggerClientEvent('esx_orgs:client:setActiveMission', source, nil)
 
     addLog(oldOrgId, state.identifier, state.playerName, 'member_left', {})
 
     pushSync(source, true)
+    broadcastMissionStateForOrg(oldOrgId)
     refreshOrgOnlineMembers(oldOrgId)
 
     return {
@@ -2471,19 +3183,28 @@ local function actionDissolveOrganization(source, payload, context)
     local orgId = state.orgId
     local memberRows = MySQL.query.await('SELECT identifier FROM org_members WHERE org_id = ?', { orgId })
 
-    MySQL.update.await('DELETE FROM org_members WHERE org_id = ?', { orgId })
-    MySQL.update.await('DELETE FROM org_ranks WHERE org_id = ?', { orgId })
-    MySQL.update.await('DELETE FROM org_points WHERE org_id = ?', { orgId })
-    MySQL.update.await('DELETE FROM org_invites WHERE org_id = ?', { orgId })
-    MySQL.update.await('DELETE FROM org_assets WHERE org_id = ?', { orgId })
-    MySQL.update.await('DELETE FROM org_logs WHERE org_id = ?', { orgId })
-    MySQL.update.await('DELETE FROM org_mission_cooldowns WHERE org_id = ?', { orgId })
-    MySQL.update.await('DELETE FROM orgs WHERE id = ?', { orgId })
+    clearMissionForOrg(orgId)
+
+    local dissolveOk = runDbTransaction({
+        { query = 'DELETE FROM org_members WHERE org_id = ?', values = { orgId } },
+        { query = 'DELETE FROM org_ranks WHERE org_id = ?', values = { orgId } },
+        { query = 'DELETE FROM org_points WHERE org_id = ?', values = { orgId } },
+        { query = 'DELETE FROM org_invites WHERE org_id = ?', values = { orgId } },
+        { query = 'DELETE FROM org_assets WHERE org_id = ?', values = { orgId } },
+        { query = 'DELETE FROM org_logs WHERE org_id = ?', values = { orgId } },
+        { query = 'DELETE FROM org_mission_cooldowns WHERE org_id = ?', values = { orgId } },
+        { query = 'DELETE FROM org_daily_limits WHERE org_id = ?', values = { orgId } },
+        { query = 'DELETE FROM org_active_missions WHERE org_id = ?', values = { orgId } },
+        { query = 'DELETE FROM orgs WHERE id = ?', values = { orgId } }
+    })
+
+    if not dissolveOk then
+        return { ok = false, message = 'No se pudo disolver la organizacion.' }
+    end
 
     for _, row in ipairs(memberRows or {}) do
         local memberSource = getSourceByIdentifier(row.identifier)
         if memberSource then
-            ActiveMissions[memberSource] = nil
             TriggerClientEvent('esx_orgs:client:setActiveMission', memberSource, nil)
             pushSync(memberSource, true)
             notify(memberSource, 'Tu organizacion fue disuelta.')
@@ -2531,6 +3252,9 @@ local ActionHandlers = {
     cancelMission = actionCancelMission,
     processRecipe = actionProcessRecipe,
     buyWeapon = actionBuyWeapon,
+    transferOwnership = actionTransferOwnership,
+    joinMission = actionJoinMission,
+    leaveMission = actionLeaveMission,
     leaveOrg = actionLeaveOrganization,
     dissolveOrg = actionDissolveOrganization,
     refreshInvites = actionOpenInviteData
@@ -2558,6 +3282,23 @@ RegisterNetEvent('esx_orgs:server:openStash', function(pointId)
     TriggerClientEvent('esx_orgs:client:openStash', sourcePlayer, stashId)
 end)
 
+RegisterNetEvent('esx_orgs:server:openClothing', function(pointId)
+    local sourcePlayer = source
+    local state, _, err = validateActionPoint(
+        sourcePlayer,
+        { pointId = tonumber(pointId), pointType = 'clothing' },
+        { 'clothing' },
+        'use_clothing'
+    )
+
+    if not state then
+        notify(sourcePlayer, err)
+        return
+    end
+
+    TriggerClientEvent('esx_orgs:client:openClothingAuthorized', sourcePlayer)
+end)
+
 RegisterNetEvent('esx_orgs:server:completeMission', function()
     local sourcePlayer = source
     local state = getPlayerState(sourcePlayer)
@@ -2566,23 +3307,22 @@ RegisterNetEvent('esx_orgs:server:completeMission', function()
         return
     end
 
-    local activeMission = ActiveMissions[sourcePlayer]
+    local activeMission = ActiveMissions[state.orgId]
     if not activeMission then
         notify(sourcePlayer, Config.Messages.missionNoActive)
         return
     end
 
-    if activeMission.orgId ~= state.orgId then
-        ActiveMissions[sourcePlayer] = nil
-        TriggerClientEvent('esx_orgs:client:setActiveMission', sourcePlayer, nil)
-        notify(sourcePlayer, 'Tu mision activa fue cancelada por cambio de organizacion.')
+    activeMission.participants = normalizeMissionParticipants(activeMission.participants)
+    if Config.MissionsSettings.RequireJoinToComplete and not isMissionParticipant(activeMission, state.identifier) then
+        notify(sourcePlayer, Config.Messages.missionNeedJoin)
         return
     end
 
     local missionTarget = activeMission.target
     if not missionTarget then
-        ActiveMissions[sourcePlayer] = nil
-        TriggerClientEvent('esx_orgs:client:setActiveMission', sourcePlayer, nil)
+        clearMissionForOrg(state.orgId)
+        broadcastMissionStateForOrg(state.orgId)
         notify(sourcePlayer, 'Mision invalida, se cancelo.')
         return
     end
@@ -2593,8 +3333,28 @@ RegisterNetEvent('esx_orgs:server:completeMission', function()
         return
     end
 
-    ActiveMissions[sourcePlayer] = nil
-    TriggerClientEvent('esx_orgs:client:setActiveMission', sourcePlayer, nil)
+    local participantMap = normalizeMissionParticipants(activeMission.participants)
+    if next(participantMap) == nil and activeMission.startedByIdentifier then
+        participantMap[activeMission.startedByIdentifier] = activeMission.startedByName or activeMission.startedByIdentifier
+    end
+
+    local participantCount = 0
+    local onlineParticipants = {}
+    for participantIdentifier, participantName in pairs(participantMap) do
+        participantCount = participantCount + 1
+        local participantSource = getSourceByIdentifier(participantIdentifier)
+        if participantSource then
+            onlineParticipants[#onlineParticipants + 1] = {
+                source = participantSource,
+                identifier = participantIdentifier,
+                name = participantName
+            }
+        end
+    end
+
+    if participantCount <= 0 then
+        participantCount = 1
+    end
 
     if activeMission.orgFundsReward and activeMission.orgFundsReward > 0 then
         MySQL.update.await(
@@ -2603,16 +3363,37 @@ RegisterNetEvent('esx_orgs:server:completeMission', function()
         )
     end
 
-    if activeMission.playerMoneyReward and activeMission.playerMoneyReward > 0 then
-        local xPlayer = ESX.GetPlayerFromId(sourcePlayer)
-        if xPlayer then
-            addPlayerMoney(xPlayer, Config.PlayerWithdrawAccount, activeMission.playerMoneyReward)
+    local playerReward = tonumber(activeMission.playerMoneyReward) or 0
+    local rewardMode = Config.MissionsSettings.RewardSplitMode or 'split'
+    local rewardEach = playerReward
+    if rewardMode == 'split' then
+        rewardEach = math.floor(playerReward / participantCount)
+    end
+    rewardEach = math.max(0, rewardEach)
+
+    if rewardEach > 0 then
+        for _, participant in ipairs(onlineParticipants) do
+            local xPlayer = ESX.GetPlayerFromId(participant.source)
+            if xPlayer then
+                addPlayerMoney(xPlayer, Config.PlayerWithdrawAccount, rewardEach)
+                notify(participant.source, ('Recompensa de mision: $%s'):format(rewardEach))
+            end
         end
     end
 
+    local xpMultiplier = 1.0
+    if Config.MissionsSettings.Cooperative and participantCount > 1 then
+        local bonusPerExtra = tonumber(Config.MissionsSettings.XpBonusPerExtraParticipant) or 0.0
+        local maxMultiplier = tonumber(Config.MissionsSettings.MaxXpBonusMultiplier) or 1.5
+        xpMultiplier = 1.0 + ((participantCount - 1) * bonusPerExtra)
+        xpMultiplier = math.min(maxMultiplier, xpMultiplier)
+    end
+
+    local xpReward = math.floor((tonumber(activeMission.xpGain) or 0) * xpMultiplier)
+
     addOrgXp(
         state.orgId,
-        activeMission.xpGain or 0,
+        xpReward,
         'mission_complete',
         state.identifier,
         state.playerName
@@ -2621,11 +3402,18 @@ RegisterNetEvent('esx_orgs:server:completeMission', function()
     addLog(state.orgId, state.identifier, state.playerName, 'mission_completed', {
         missionId = activeMission.missionId,
         orgFundsReward = activeMission.orgFundsReward,
-        playerMoneyReward = activeMission.playerMoneyReward
+        playerMoneyReward = activeMission.playerMoneyReward,
+        participantCount = participantCount,
+        xpReward = xpReward
     })
 
-    notify(sourcePlayer, Config.Messages.missionCompleted)
+    clearMissionForOrg(state.orgId)
+    broadcastMissionStateForOrg(state.orgId)
     refreshOrgOnlineMembers(state.orgId)
+
+    for _, participant in ipairs(onlineParticipants) do
+        notify(participant.source, Config.Messages.missionCompleted)
+    end
 end)
 
 RegisterNetEvent('esx_orgs:server:assetSpawnFailed', function(assetId)
@@ -2800,7 +3588,7 @@ local function createTables()
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 PRIMARY KEY (id),
-                UNIQUE KEY uq_org_point_type (org_id, point_type),
+                KEY idx_org_points_type (org_id, point_type),
                 KEY idx_org_points_org (org_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ]]
@@ -2882,6 +3670,72 @@ local function createTables()
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ]]
     )
+
+    MySQL.query.await(
+        [[
+            CREATE TABLE IF NOT EXISTS org_active_missions (
+                org_id INT UNSIGNED NOT NULL,
+                mission_id VARCHAR(64) NOT NULL,
+                label VARCHAR(80) NOT NULL,
+                target LONGTEXT NOT NULL,
+                participants LONGTEXT NOT NULL,
+                xp_gain INT NOT NULL DEFAULT 0,
+                org_funds_reward INT NOT NULL DEFAULT 0,
+                player_money_reward INT NOT NULL DEFAULT 0,
+                started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                started_by_identifier VARCHAR(80) NOT NULL,
+                started_by_name VARCHAR(80) NOT NULL,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (org_id),
+                KEY idx_org_active_mission (mission_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]]
+    )
+
+    MySQL.query.await(
+        [[
+            CREATE TABLE IF NOT EXISTS org_daily_limits (
+                id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                org_id INT UNSIGNED NOT NULL,
+                usage_key VARCHAR(64) NOT NULL,
+                usage_date DATE NOT NULL,
+                usage_count INT UNSIGNED NOT NULL DEFAULT 0,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (id),
+                UNIQUE KEY uq_org_daily_limit (org_id, usage_key, usage_date),
+                KEY idx_org_daily_lookup (org_id, usage_key)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ]]
+    )
+
+    local hasLegacyPointUnique = MySQL.scalar.await(
+        [[
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+                AND TABLE_NAME = 'org_points'
+                AND INDEX_NAME = 'uq_org_point_type'
+        ]]
+    ) or 0
+
+    if hasLegacyPointUnique > 0 then
+        MySQL.query.await('ALTER TABLE org_points DROP INDEX uq_org_point_type')
+    end
+
+    local hasPointTypeIndex = MySQL.scalar.await(
+        [[
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+                AND TABLE_NAME = 'org_points'
+                AND INDEX_NAME = 'idx_org_points_type'
+        ]]
+    ) or 0
+
+    if hasPointTypeIndex <= 0 then
+        MySQL.query.await('ALTER TABLE org_points ADD INDEX idx_org_points_type (org_id, point_type)')
+    end
 end
 
 AddEventHandler('esx:playerLoaded', function(playerId, xPlayer)
@@ -2901,8 +3755,22 @@ AddEventHandler('esx:onPlayerLogout', function(playerId)
         return
     end
 
+    local state = PlayerStates[sourcePlayer]
+    if state and state.orgId then
+        local activeMission = ActiveMissions[state.orgId]
+        if activeMission and type(activeMission.participants) == 'table' then
+            activeMission.participants[state.identifier] = nil
+            if getMissionParticipantCount(activeMission) <= 0 then
+                clearMissionForOrg(state.orgId)
+            else
+                persistMissionForOrg(state.orgId)
+            end
+            broadcastMissionStateForOrg(state.orgId)
+            refreshOrgOnlineMembers(state.orgId)
+        end
+    end
+
     PlayerStates[sourcePlayer] = nil
-    ActiveMissions[sourcePlayer] = nil
     LastActionAt[sourcePlayer] = nil
     TriggerClientEvent('esx_orgs:client:setActiveMission', sourcePlayer, nil)
     TriggerClientEvent('esx_orgs:client:syncState', sourcePlayer, {
@@ -2915,14 +3783,29 @@ end)
 
 AddEventHandler('playerDropped', function()
     local sourcePlayer = source
+    local state = PlayerStates[sourcePlayer]
+    if state and state.orgId then
+        local activeMission = ActiveMissions[state.orgId]
+        if activeMission and type(activeMission.participants) == 'table' then
+            activeMission.participants[state.identifier] = nil
+            if getMissionParticipantCount(activeMission) <= 0 then
+                clearMissionForOrg(state.orgId)
+            else
+                persistMissionForOrg(state.orgId)
+            end
+            broadcastMissionStateForOrg(state.orgId)
+            refreshOrgOnlineMembers(state.orgId)
+        end
+    end
+
     PlayerStates[sourcePlayer] = nil
-    ActiveMissions[sourcePlayer] = nil
     LastActionAt[sourcePlayer] = nil
 end)
 
 MySQL.ready(function()
     createTables()
     registerAllStashes()
+    loadPersistedMissions()
 
     for _, playerId in ipairs(GetPlayers()) do
         local sourcePlayer = tonumber(playerId)

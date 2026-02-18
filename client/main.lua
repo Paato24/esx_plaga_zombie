@@ -9,6 +9,8 @@ local ClientState = {
 
 local NUIOpen = false
 local ActiveContext = {}
+local CreateDraftPoints = {}
+local PointBlips = {}
 
 local function notify(message)
     if ESX and ESX.ShowNotification then
@@ -27,6 +29,129 @@ local function showHelpText(text)
     EndTextCommandDisplayHelp(0, false, true, -1)
 end
 
+local function hasClientPermission(permissionKey)
+    local membership = ClientState.membership
+    if not membership then
+        return false
+    end
+
+    if membership.isOwner then
+        return true
+    end
+
+    if not permissionKey then
+        return true
+    end
+
+    return membership.permissions and membership.permissions[permissionKey] == true
+end
+
+local function getPermissionForPointType(pointType)
+    local permissionByType = {
+        boss = 'manage_org',
+        clothing = 'use_clothing',
+        inventory = 'use_stash',
+        organization = nil,
+        mission = 'use_missions',
+        drug_process = 'use_drugs',
+        weapon_shop = 'use_weapons',
+        invite = 'manage_invites',
+        garage = 'use_garage',
+        hangar = 'use_hangar'
+    }
+
+    return permissionByType[pointType]
+end
+
+local function canSeePointType(pointType)
+    local membership = ClientState.membership
+    if not membership then
+        return false
+    end
+
+    if membership.isOwner then
+        return true
+    end
+
+    local requiredPermission = getPermissionForPointType(pointType)
+    if requiredPermission and hasClientPermission(requiredPermission) then
+        return true
+    end
+
+    if not Config.PointVisibility.Enabled then
+        return true
+    end
+
+    local minByType = Config.PointVisibility.MinRankByPointType or {}
+    local minWeight = minByType[pointType]
+    if minWeight == nil then
+        minWeight = Config.PointVisibility.DefaultMinRankWeight or 0
+    end
+
+    return (membership.rankWeight or 0) >= minWeight
+end
+
+local function clearPointBlips()
+    for _, blip in pairs(PointBlips) do
+        if blip and DoesBlipExist(blip) then
+            RemoveBlip(blip)
+        end
+    end
+
+    PointBlips = {}
+end
+
+local function canSeeBlipForPointType(pointType)
+    local membership = ClientState.membership
+    if not membership or not Config.Blips.Enabled then
+        return false
+    end
+
+    if membership.isOwner then
+        return true
+    end
+
+    local requiredPermission = getPermissionForPointType(pointType)
+    if requiredPermission and hasClientPermission(requiredPermission) then
+        return true
+    end
+
+    local minByType = Config.Blips.MinRankByPointType or {}
+    local minWeight = minByType[pointType]
+    if minWeight == nil then
+        minWeight = Config.Blips.DefaultMinRankWeight or 0
+    end
+
+    return (membership.rankWeight or 0) >= minWeight
+end
+
+local function refreshPointBlips()
+    clearPointBlips()
+
+    if not Config.Blips.Enabled or not ClientState.membership then
+        return
+    end
+
+    local spriteByType = Config.Blips.SpriteByPointType or {}
+    local colorByType = Config.Blips.ColorByPointType or {}
+
+    for _, point in ipairs(ClientState.points or {}) do
+        if canSeeBlipForPointType(point.point_type) then
+            local blip = AddBlipForCoord(point.x + 0.0, point.y + 0.0, point.z + 0.0)
+            SetBlipSprite(blip, spriteByType[point.point_type] or Config.Blips.DefaultSprite or 84)
+            SetBlipColour(blip, colorByType[point.point_type] or Config.Blips.DefaultColor or 27)
+            SetBlipScale(blip, Config.Blips.Scale or 0.78)
+            SetBlipAsShortRange(blip, true)
+
+            BeginTextCommandSetBlipName('STRING')
+            AddTextComponentSubstringPlayerName(point.label or point.point_type or 'Punto org')
+            EndTextCommandSetBlipName(blip)
+
+            PointBlips[point.id] = blip
+        end
+    end
+end
+
 local function buildStaticPayload()
     return {
         pointTypes = Config.PointTypes,
@@ -36,7 +161,8 @@ local function buildStaticPayload()
         assetCatalog = Config.AssetCatalog,
         weaponShop = Config.WeaponShop,
         missions = Config.Missions,
-        drugRecipes = Config.DrugRecipes
+        drugRecipes = Config.DrugRecipes,
+        economy = Config.Economy
     }
 end
 
@@ -50,10 +176,20 @@ local function applySync(syncPayload)
     ClientState.pendingInvites = syncPayload.pendingInvites or {}
     ClientState.activeMission = syncPayload.activeMission
 
+    if ClientState.activeMission and ClientState.activeMission.target then
+        SetNewWaypoint(
+            ClientState.activeMission.target.x + 0.0,
+            ClientState.activeMission.target.y + 0.0
+        )
+    end
+
+    refreshPointBlips()
+
     if NUIOpen then
         SendNUIMessage({
             action = 'syncLite',
-            sync = syncPayload
+            sync = syncPayload,
+            draftPoints = CreateDraftPoints
         })
     end
 end
@@ -103,6 +239,47 @@ local function openClothingMenu()
     notify('No hay sistema de ropa configurado.')
 end
 
+local function captureVehicleData(vehicle)
+    local vehicleData = {}
+
+    if ESX and ESX.Game and ESX.Game.GetVehicleProperties then
+        local ok, properties = pcall(ESX.Game.GetVehicleProperties, vehicle)
+        if ok and type(properties) == 'table' then
+            vehicleData = properties
+        end
+    end
+
+    vehicleData.engineHealth = GetVehicleEngineHealth(vehicle)
+    vehicleData.bodyHealth = GetVehicleBodyHealth(vehicle)
+    vehicleData.fuelLevel = GetVehicleFuelLevel(vehicle)
+    vehicleData.dirtLevel = GetVehicleDirtLevel(vehicle)
+
+    return vehicleData
+end
+
+local function applyVehicleData(vehicle, vehicleData)
+    if type(vehicleData) ~= 'table' then
+        return
+    end
+
+    if ESX and ESX.Game and ESX.Game.SetVehicleProperties then
+        pcall(ESX.Game.SetVehicleProperties, vehicle, vehicleData)
+    end
+
+    if vehicleData.engineHealth then
+        SetVehicleEngineHealth(vehicle, vehicleData.engineHealth + 0.0)
+    end
+    if vehicleData.bodyHealth then
+        SetVehicleBodyHealth(vehicle, vehicleData.bodyHealth + 0.0)
+    end
+    if vehicleData.fuelLevel then
+        SetVehicleFuelLevel(vehicle, vehicleData.fuelLevel + 0.0)
+    end
+    if vehicleData.dirtLevel then
+        SetVehicleDirtLevel(vehicle, vehicleData.dirtLevel + 0.0)
+    end
+end
+
 local function spawnAsset(spawnData)
     if not spawnData or not spawnData.model or not spawnData.coords then
         return false, 'Datos de spawn invalidos.'
@@ -147,9 +324,15 @@ local function spawnAsset(spawnData)
         SetVehicleNumberPlateText(vehicle, spawnData.plate)
     end
 
+    applyVehicleData(vehicle, spawnData.vehicleData)
+
     SetVehicleOnGroundProperly(vehicle)
     SetEntityAsMissionEntity(vehicle, true, true)
     TaskWarpPedIntoVehicle(PlayerPedId(), vehicle, -1)
+
+    if spawnData.grantKeys and spawnData.vehicleKeysEvent and spawnData.plate then
+        TriggerEvent(spawnData.vehicleKeysEvent, spawnData.plate)
+    end
 
     return true
 end
@@ -174,7 +357,8 @@ local function openNui(route, context)
             route = route or 'overview',
             context = ActiveContext,
             data = response.data,
-            static = buildStaticPayload()
+            static = buildStaticPayload(),
+            draftPoints = CreateDraftPoints
         })
     end)
 end
@@ -200,7 +384,7 @@ local function handlePointInteraction(entry)
     end
 
     if pointType == 'clothing' then
-        openClothingMenu()
+        TriggerServerEvent('esx_orgs:server:openClothing', point.id)
         return
     end
 
@@ -236,7 +420,90 @@ RegisterNUICallback('performAction', function(data, cb)
     local payload = data.payload or {}
     local context = data.context or ActiveContext or {}
 
-    if actionName == 'setPointHere' then
+    if actionName == 'captureCreatePoint' then
+        local pointType = payload.pointType
+        if not Config.PointTypes[pointType] then
+            cb({ ok = false, message = 'Tipo de punto invalido.' })
+            return
+        end
+
+        local coords = GetEntityCoords(PlayerPedId())
+        local pointConfig = Config.PointTypes[pointType]
+        CreateDraftPoints[#CreateDraftPoints + 1] = {
+            pointType = pointType,
+            label = pointConfig.label,
+            coords = {
+                x = coords.x,
+                y = coords.y,
+                z = coords.z
+            },
+            heading = GetEntityHeading(PlayerPedId()),
+            radius = pointConfig.radius or 2.0
+        }
+
+        cb({
+            ok = true,
+            message = Config.Messages.createPointCaptured,
+            draftPoints = CreateDraftPoints
+        })
+        return
+    elseif actionName == 'addCreatePointManual' then
+        local pointType = payload.pointType
+        local pointConfig = Config.PointTypes[pointType]
+        if not pointConfig then
+            cb({ ok = false, message = 'Tipo de punto invalido.' })
+            return
+        end
+
+        local x = tonumber(payload.x)
+        local y = tonumber(payload.y)
+        local z = tonumber(payload.z)
+        if not x or not y or not z then
+            cb({ ok = false, message = 'Coordenadas manuales invalidas.' })
+            return
+        end
+
+        CreateDraftPoints[#CreateDraftPoints + 1] = {
+            pointType = pointType,
+            label = pointConfig.label,
+            coords = {
+                x = x,
+                y = y,
+                z = z
+            },
+            heading = tonumber(payload.heading) or 0.0,
+            radius = tonumber(payload.radius) or pointConfig.radius or 2.0
+        }
+
+        cb({
+            ok = true,
+            message = 'Punto inicial agregado manualmente.',
+            draftPoints = CreateDraftPoints
+        })
+        return
+    elseif actionName == 'removeCreatePointDraft' then
+        local index = tonumber(payload.index)
+        if not index or not CreateDraftPoints[index] then
+            cb({ ok = false, message = 'Punto inicial invalido.' })
+            return
+        end
+
+        table.remove(CreateDraftPoints, index)
+        cb({
+            ok = true,
+            message = Config.Messages.createPointRemoved,
+            draftPoints = CreateDraftPoints
+        })
+        return
+    elseif actionName == 'clearCreatePointDraft' then
+        CreateDraftPoints = {}
+        cb({
+            ok = true,
+            message = Config.Messages.createPointsCleared,
+            draftPoints = CreateDraftPoints
+        })
+        return
+    elseif actionName == 'setPointHere' then
         local coords = GetEntityCoords(PlayerPedId())
         payload.coords = {
             x = coords.x,
@@ -254,6 +521,9 @@ RegisterNUICallback('performAction', function(data, cb)
 
         local plate = GetVehicleNumberPlateText(vehicle) or ''
         payload.plate = (plate:gsub('^%s*(.-)%s*$', '%1'))
+        payload.vehicleData = captureVehicleData(vehicle)
+    elseif actionName == 'createOrg' then
+        payload.customPoints = CreateDraftPoints
     end
 
     ESX.TriggerServerCallback('esx_orgs:server:handleAction', function(response)
@@ -291,6 +561,11 @@ RegisterNUICallback('performAction', function(data, cb)
             end
         end
 
+        if actionName == 'createOrg' and response.ok then
+            CreateDraftPoints = {}
+        end
+
+        response.draftPoints = CreateDraftPoints
         cb(response)
     end, actionName, payload, context)
 end)
@@ -322,6 +597,11 @@ RegisterNetEvent('esx_orgs:client:openStash', function(stashId)
     exports.ox_inventory:openInventory('stash', stashId)
 end)
 
+RegisterNetEvent('esx_orgs:client:openClothingAuthorized', function()
+    notify(Config.Messages.clothingOpened)
+    openClothingMenu()
+end)
+
 AddEventHandler('onClientResourceStart', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then
         return
@@ -341,6 +621,14 @@ AddEventHandler('playerSpawned', function()
     requestInitialSync()
 end)
 
+AddEventHandler('onResourceStop', function(resourceName)
+    if resourceName ~= GetCurrentResourceName() then
+        return
+    end
+
+    clearPointBlips()
+end)
+
 CreateThread(function()
     while true do
         local waitMs = 1000
@@ -351,47 +639,49 @@ CreateThread(function()
 
         if ClientState.membership then
             for _, point in ipairs(ClientState.points or {}) do
-                local pointCoords = vector3(point.x + 0.0, point.y + 0.0, point.z + 0.0)
-                local distance = #(playerCoords - pointCoords)
-                if distance <= Config.Marker.DrawDistance then
-                    waitMs = 0
-                    local pointTypeConfig = Config.PointTypes[point.point_type] or {}
-                    local color = pointTypeConfig.color or { r = 255, g = 255, b = 255 }
+                if canSeePointType(point.point_type) then
+                    local pointCoords = vector3(point.x + 0.0, point.y + 0.0, point.z + 0.0)
+                    local distance = #(playerCoords - pointCoords)
+                    if distance <= Config.Marker.DrawDistance then
+                        waitMs = 0
+                        local pointTypeConfig = Config.PointTypes[point.point_type] or {}
+                        local color = pointTypeConfig.color or { r = 255, g = 255, b = 255 }
 
-                    DrawMarker(
-                        Config.Marker.Type,
-                        point.x + 0.0,
-                        point.y + 0.0,
-                        (point.z + 0.0) - 1.0,
-                        0.0,
-                        0.0,
-                        0.0,
-                        0.0,
-                        0.0,
-                        0.0,
-                        Config.Marker.Scale.x,
-                        Config.Marker.Scale.y,
-                        Config.Marker.Scale.z,
-                        color.r,
-                        color.g,
-                        color.b,
-                        Config.Marker.Alpha,
-                        false,
-                        false,
-                        2,
-                        false,
-                        nil,
-                        nil,
-                        false
-                    )
+                        DrawMarker(
+                            Config.Marker.Type,
+                            point.x + 0.0,
+                            point.y + 0.0,
+                            (point.z + 0.0) - 1.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            Config.Marker.Scale.x,
+                            Config.Marker.Scale.y,
+                            Config.Marker.Scale.z,
+                            color.r,
+                            color.g,
+                            color.b,
+                            Config.Marker.Alpha,
+                            false,
+                            false,
+                            2,
+                            false,
+                            nil,
+                            nil,
+                            false
+                        )
 
-                    if distance <= ((tonumber(point.radius) or Config.Marker.InteractDistance) + 0.2)
-                        and distance < nearestDistance then
-                        nearestDistance = distance
-                        nearest = {
-                            kind = 'org_point',
-                            point = point
-                        }
+                        if distance <= ((tonumber(point.radius) or Config.Marker.InteractDistance) + 0.2)
+                            and distance < nearestDistance then
+                            nearestDistance = distance
+                            nearest = {
+                                kind = 'org_point',
+                                point = point
+                            }
+                        end
                     end
                 end
             end

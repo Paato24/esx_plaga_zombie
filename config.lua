@@ -17,6 +17,7 @@ Config.Marker = {
 Config.ServerDistanceTolerance = 3.0
 Config.MissionCompletionDistance = 8.0
 Config.InviteDurationMinutes = 30
+Config.MaxPointsPerType = 12
 
 Config.CreationMoneyAccount = 'bank' -- bank or cash
 Config.PlayerDepositAccount = 'cash' -- bank or cash
@@ -35,6 +36,110 @@ Config.Clothing = {
     Mode = 'esx_skin', -- esx_skin, illenium, custom
     CustomClientEvent = '',
     Saveable = true
+}
+
+Config.CreationPointCustomization = {
+    Enabled = true,
+    MaxCustomPoints = 30,
+    AllowMultiplePerType = true,
+    MaxDistanceFromCreationMarker = 300.0,
+    RequiredPointTypes = {
+        'boss',
+        'organization',
+        'inventory',
+        'clothing',
+        'mission',
+        'invite',
+        'garage',
+        'hangar',
+        'drug_process',
+        'weapon_shop'
+    }
+}
+
+Config.PointVisibility = {
+    Enabled = true,
+    DefaultMinRankWeight = 0,
+    MinRankByPointType = {
+        boss = 70,
+        organization = 0,
+        inventory = 0,
+        clothing = 0,
+        mission = 0,
+        invite = 55,
+        weapon_shop = 30,
+        drug_process = 30,
+        garage = 0,
+        hangar = 40
+    }
+}
+
+Config.Blips = {
+    Enabled = true,
+    Scale = 0.78,
+    DefaultSprite = 84,
+    DefaultColor = 27,
+    DefaultMinRankWeight = 0,
+    MinRankByPointType = {
+        boss = 70,
+        invite = 55,
+        hangar = 40
+    },
+    SpriteByPointType = {
+        boss = 457,
+        clothing = 73,
+        inventory = 478,
+        organization = 84,
+        mission = 280,
+        drug_process = 499,
+        weapon_shop = 110,
+        invite = 153,
+        garage = 357,
+        hangar = 64
+    },
+    ColorByPointType = {
+        boss = 1,
+        clothing = 3,
+        inventory = 46,
+        organization = 7,
+        mission = 2,
+        drug_process = 25,
+        weapon_shop = 17,
+        invite = 4,
+        garage = 38,
+        hangar = 39
+    }
+}
+
+Config.VehicleKeys = {
+    Enabled = false,
+    ClientEvent = 'vehiclekeys:client:SetOwner'
+}
+
+Config.MissionsSettings = {
+    Cooperative = true,
+    RequireJoinToComplete = true,
+    RewardSplitMode = 'split', -- split or full
+    XpBonusPerExtraParticipant = 0.10,
+    MaxXpBonusMultiplier = 1.50
+}
+
+Config.Economy = {
+    DynamicPricing = true,
+    LevelDiscountPerLevel = 2.0,
+    MaxLevelDiscount = 30.0,
+    WeaponUsageIncreasePerPurchase = 4.0,
+    DrugUsageIncreasePerProcess = 3.0,
+    MaxUsageIncrease = 45.0,
+    DailyLimits = {
+        weaponPurchases = 8,
+        drugProcesses = 12
+    },
+    DefaultDrugProcessFee = 8000
+}
+
+Config.Logs = {
+    MaxRowsInNui = 180
 }
 
 Config.LevelThresholds = {
@@ -370,6 +475,7 @@ Config.DrugRecipes = {
         requiredLevel = 3,
         requiredRankWeight = 35,
         xpGain = 90,
+        processFee = 12000,
         inputs = {
             { item = 'coca_leaf', count = 6 },
             { item = 'acetone', count = 2 }
@@ -384,6 +490,7 @@ Config.DrugRecipes = {
         requiredLevel = 5,
         requiredRankWeight = 45,
         xpGain = 120,
+        processFee = 16000,
         inputs = {
             { item = 'ephedrine', count = 5 },
             { item = 'chemical_solvent', count = 3 }
@@ -398,6 +505,7 @@ Config.DrugRecipes = {
         requiredLevel = 2,
         requiredRankWeight = 20,
         xpGain = 50,
+        processFee = 5000,
         inputs = {
             { item = 'weed', count = 10 }
         },
@@ -472,6 +580,16 @@ Config.Messages = {
     missionStarted = 'Mision iniciada. Se marco el objetivo en el mapa.',
     missionCompleted = 'Mision completada con exito.',
     missionNoActive = 'No tienes una mision activa.',
+    missionAlreadyActive = 'Tu organizacion ya tiene una mision activa.',
+    missionJoined = 'Te uniste a la mision activa.',
+    missionLeft = 'Saliste de la mision activa.',
+    missionNeedJoin = 'Debes unirte a la mision antes de completarla.',
     recipeDone = 'Proceso completado.',
-    weaponBought = 'Compra realizada.'
+    weaponBought = 'Compra realizada.',
+    clothingOpened = 'Abriendo vestidor...',
+    ownershipTransferred = 'Liderazgo transferido correctamente.',
+    dailyLimitReached = 'Se alcanzo el limite diario para esta accion.',
+    createPointCaptured = 'Punto inicial capturado para creacion.',
+    createPointRemoved = 'Punto inicial removido.',
+    createPointsCleared = 'Puntos iniciales limpiados.'
 }
