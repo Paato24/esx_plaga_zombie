@@ -36,6 +36,8 @@ Script completo para FiveM con:
   - compra de vehiculos y aeronaves
   - sacar/guardar en garage/hangar
 - guardar/sacar con estado de vehiculo (propiedades, fuel, salud)
+  - limite configurable por modelo para cada organizacion (`maxOwned`)
+  - color de spawn configurable por modelo o por tipo
 - Multiples puntos por tipo (multipoint)
 - Blips y visibilidad de puntos por rango/permisos
 - Economia controlada:
@@ -100,6 +102,7 @@ El script crea automaticamente estas tablas con `oxmysql`:
 - Costos y limites por tipo de org
 - Config de economia dinamica y limites diarios
 - Config de visibilidad/blips por rango
+- Config de limites y colores de activos (`Config.AssetLimits`, `Config.AssetSpawnColors`)
 - Rutas de misiones y recompensas
 - Recetas de drogas
 - Catalogo de vehiculos y aeronaves

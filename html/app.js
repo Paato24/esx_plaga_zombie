@@ -600,9 +600,18 @@ function renderAssets() {
     const contextType = getContextPointType();
     const catalog = appState.staticData?.assetCatalog || {};
     const assets = appState.data?.assets || [];
+    const ownedCountByModel = {};
+    assets.forEach((asset) => {
+        const key = `${asset.asset_type}:${asset.model}`;
+        ownedCountByModel[key] = (ownedCountByModel[key] || 0) + 1;
+    });
 
     const vehicleCatalog = (catalog.vehicle || [])
         .map((entry) => {
+            const modelKey = `vehicle:${entry.model}`;
+            const owned = ownedCountByModel[modelKey] || 0;
+            const maxOwned = Number(entry.maxOwned || 0);
+            const maxLabel = maxOwned > 0 ? `${owned}/${maxOwned}` : `${owned}/sin limite`;
             return `
                 <tr>
                     <td>${escapeHtml(entry.label)}</td>
@@ -610,6 +619,7 @@ function renderAssets() {
                     <td>${entry.requiredLevel}</td>
                     <td>${entry.requiredRankWeight}</td>
                     <td>${formatMoney(entry.price)}</td>
+                    <td>${escapeHtml(maxLabel)}</td>
                     <td>
                         <button class="tiny primary" data-click="buy-asset" data-asset-type="vehicle" data-model="${escapeHtml(entry.model)}" ${
                             canManageAssets ? '' : 'disabled'
@@ -622,6 +632,10 @@ function renderAssets() {
 
     const aircraftCatalog = (catalog.aircraft || [])
         .map((entry) => {
+            const modelKey = `aircraft:${entry.model}`;
+            const owned = ownedCountByModel[modelKey] || 0;
+            const maxOwned = Number(entry.maxOwned || 0);
+            const maxLabel = maxOwned > 0 ? `${owned}/${maxOwned}` : `${owned}/sin limite`;
             return `
                 <tr>
                     <td>${escapeHtml(entry.label)}</td>
@@ -629,6 +643,7 @@ function renderAssets() {
                     <td>${entry.requiredLevel}</td>
                     <td>${entry.requiredRankWeight}</td>
                     <td>${formatMoney(entry.price)}</td>
+                    <td>${escapeHtml(maxLabel)}</td>
                     <td>
                         <button class="tiny primary" data-click="buy-asset" data-asset-type="aircraft" data-model="${escapeHtml(entry.model)}" ${
                             canManageAssets ? '' : 'disabled'
@@ -679,9 +694,9 @@ function renderAssets() {
             <h3>Catalogo vehiculos</h3>
             <table>
                 <thead>
-                    <tr><th>Label</th><th>Modelo</th><th>Nivel</th><th>Peso rango</th><th>Precio</th><th>Accion</th></tr>
+                    <tr><th>Label</th><th>Modelo</th><th>Nivel</th><th>Peso rango</th><th>Precio</th><th>Stock org</th><th>Accion</th></tr>
                 </thead>
-                <tbody>${vehicleCatalog || '<tr><td colspan="6" class="muted">Sin catalogo.</td></tr>'}</tbody>
+                <tbody>${vehicleCatalog || '<tr><td colspan="7" class="muted">Sin catalogo.</td></tr>'}</tbody>
             </table>
         </div>
 
@@ -689,9 +704,9 @@ function renderAssets() {
             <h3>Catalogo aeronaves</h3>
             <table>
                 <thead>
-                    <tr><th>Label</th><th>Modelo</th><th>Nivel</th><th>Peso rango</th><th>Precio</th><th>Accion</th></tr>
+                    <tr><th>Label</th><th>Modelo</th><th>Nivel</th><th>Peso rango</th><th>Precio</th><th>Stock org</th><th>Accion</th></tr>
                 </thead>
-                <tbody>${aircraftCatalog || '<tr><td colspan="6" class="muted">Sin catalogo.</td></tr>'}</tbody>
+                <tbody>${aircraftCatalog || '<tr><td colspan="7" class="muted">Sin catalogo.</td></tr>'}</tbody>
             </table>
         </div>
 

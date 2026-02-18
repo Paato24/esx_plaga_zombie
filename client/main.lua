@@ -280,6 +280,53 @@ local function applyVehicleData(vehicle, vehicleData)
     end
 end
 
+local function applySpawnColor(vehicle, colorData)
+    if type(colorData) ~= 'table' then
+        return
+    end
+
+    local primaryIndex = tonumber(colorData.primaryIndex)
+    local secondaryIndex = tonumber(colorData.secondaryIndex)
+    local pearlescentIndex = tonumber(colorData.pearlescentIndex)
+    local wheelColorIndex = tonumber(colorData.wheelColorIndex)
+
+    if primaryIndex and secondaryIndex then
+        SetVehicleColours(vehicle, primaryIndex, secondaryIndex)
+    else
+        if primaryIndex then
+            local _, currentSecondary = GetVehicleColours(vehicle)
+            SetVehicleColours(vehicle, primaryIndex, currentSecondary)
+        end
+        if secondaryIndex then
+            local currentPrimary, _ = GetVehicleColours(vehicle)
+            SetVehicleColours(vehicle, currentPrimary, secondaryIndex)
+        end
+    end
+
+    if pearlescentIndex or wheelColorIndex then
+        local currentPearl, currentWheel = GetVehicleExtraColours(vehicle)
+        SetVehicleExtraColours(
+            vehicle,
+            pearlescentIndex or currentPearl,
+            wheelColorIndex or currentWheel
+        )
+    end
+
+    if type(colorData.primaryRGB) == 'table' then
+        local rgb = colorData.primaryRGB
+        if tonumber(rgb.r) and tonumber(rgb.g) and tonumber(rgb.b) then
+            SetVehicleCustomPrimaryColour(vehicle, tonumber(rgb.r), tonumber(rgb.g), tonumber(rgb.b))
+        end
+    end
+
+    if type(colorData.secondaryRGB) == 'table' then
+        local rgb = colorData.secondaryRGB
+        if tonumber(rgb.r) and tonumber(rgb.g) and tonumber(rgb.b) then
+            SetVehicleCustomSecondaryColour(vehicle, tonumber(rgb.r), tonumber(rgb.g), tonumber(rgb.b))
+        end
+    end
+end
+
 local function spawnAsset(spawnData)
     if not spawnData or not spawnData.model or not spawnData.coords then
         return false, 'Datos de spawn invalidos.'
@@ -325,6 +372,7 @@ local function spawnAsset(spawnData)
     end
 
     applyVehicleData(vehicle, spawnData.vehicleData)
+    applySpawnColor(vehicle, spawnData.spawnColor)
 
     SetVehicleOnGroundProperly(vehicle)
     SetEntityAsMissionEntity(vehicle, true, true)

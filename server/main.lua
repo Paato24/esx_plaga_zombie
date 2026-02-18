@@ -1040,6 +1040,36 @@ local function getAssetCatalogEntry(assetType, model)
     return nil
 end
 
+local function getConfiguredAssetLimit(catalogEntry)
+    local modelLimit = tonumber(catalogEntry and catalogEntry.maxOwned)
+    if modelLimit and modelLimit > 0 then
+        return math.floor(modelLimit)
+    end
+
+    local globalLimit = tonumber(Config.AssetLimits and Config.AssetLimits.DefaultPerModel)
+    if globalLimit and globalLimit > 0 then
+        return math.floor(globalLimit)
+    end
+
+    return 0
+end
+
+local function getConfiguredAssetColor(assetType, catalogEntry)
+    if catalogEntry and type(catalogEntry.spawnColor) == 'table' then
+        return deepCopy(catalogEntry.spawnColor)
+    end
+
+    if Config.AssetSpawnColors and type(Config.AssetSpawnColors[assetType]) == 'table' then
+        return deepCopy(Config.AssetSpawnColors[assetType])
+    end
+
+    if Config.AssetSpawnColors and type(Config.AssetSpawnColors.default) == 'table' then
+        return deepCopy(Config.AssetSpawnColors.default)
+    end
+
+    return nil
+end
+
 local function buildAppData(source)
     local state = loadPlayerState(source)
     if not state then
@@ -2371,6 +2401,29 @@ local function actionBuyAsset(source, payload, context)
         return { ok = false, message = 'Tu rango no puede comprar este activo.' }
     end
 
+    local maxOwnedForModel = getConfiguredAssetLimit(catalogEntry)
+    if maxOwnedForModel > 0 then
+        local ownedCount = MySQL.scalar.await(
+            [[
+                SELECT COUNT(*)
+                FROM org_assets
+                WHERE org_id = ? AND asset_type = ? AND model = ?
+            ]],
+            { state.orgId, assetType, catalogEntry.model }
+        ) or 0
+
+        if ownedCount >= maxOwnedForModel then
+            return {
+                ok = false,
+                message = ('%s (max %s de %s)'):format(
+                    Config.Messages.assetModelLimit,
+                    maxOwnedForModel,
+                    catalogEntry.label
+                )
+            }
+        end
+    end
+
     local usedToday = getDailyUsageCount(state.orgId, ('asset_%s_purchase'):format(assetType))
     local finalPrice = calculateDynamicPrice(
         catalogEntry.price,
@@ -2389,6 +2442,7 @@ local function actionBuyAsset(source, payload, context)
     end
 
     local plate = generatePlate(state.orgId)
+    local spawnColor = getConfiguredAssetColor(assetType, catalogEntry)
     local insertedAsset = MySQL.insert.await(
         [[
             INSERT INTO org_assets (org_id, asset_type, model, label, required_level, required_rank_weight, price, plate, stored, metadata)
@@ -2403,7 +2457,9 @@ local function actionBuyAsset(source, payload, context)
             catalogEntry.requiredRankWeight or 0,
             finalPrice,
             plate,
-            encodeJson({})
+            encodeJson({
+                spawnColor = spawnColor
+            })
         }
     )
 
@@ -2481,6 +2537,8 @@ local function actionSpawnAsset(source, payload, context)
 
     local metadata = decodeJson(asset.metadata)
     local vehicleData = metadata.vehicleData
+    local catalogEntry = getAssetCatalogEntry(asset.asset_type, asset.model)
+    local spawnColor = metadata.spawnColor or getConfiguredAssetColor(asset.asset_type, catalogEntry)
 
     if state.orgLevel < (tonumber(asset.required_level) or 1) then
         return { ok = false, message = 'Tu organizacion no tiene nivel para este activo.' }
@@ -2527,6 +2585,7 @@ local function actionSpawnAsset(source, payload, context)
             label = asset.label,
             plate = asset.plate,
             vehicleData = vehicleData,
+            spawnColor = spawnColor,
             grantKeys = Config.VehicleKeys.Enabled == true,
             vehicleKeysEvent = Config.VehicleKeys.ClientEvent,
             coords = {

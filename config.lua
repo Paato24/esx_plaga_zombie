@@ -254,6 +254,33 @@ Config.SpawnOffsets = {
     hangar = 10.0
 }
 
+Config.AssetLimits = {
+    -- 0 o menor = sin limite global por modelo
+    DefaultPerModel = 0
+}
+
+Config.AssetSpawnColors = {
+    -- Paleta por defecto si el asset no define su propio color
+    default = {
+        primaryIndex = 0,
+        secondaryIndex = 0,
+        pearlescentIndex = 0,
+        wheelColorIndex = 0
+    },
+    vehicle = {
+        primaryIndex = 111,
+        secondaryIndex = 111,
+        pearlescentIndex = 111,
+        wheelColorIndex = 111
+    },
+    aircraft = {
+        primaryIndex = 12,
+        secondaryIndex = 12,
+        pearlescentIndex = 12,
+        wheelColorIndex = 12
+    }
+}
+
 Config.CreateOrganizationMarkers = {
     {
         label = 'Registro de organizaciones',
@@ -446,17 +473,89 @@ Config.OrganizationTypes = {
 
 Config.AssetCatalog = {
     vehicle = {
-        { model = 'sultan', label = 'Sultan', price = 45000, requiredLevel = 1, requiredRankWeight = 0 },
-        { model = 'kuruma', label = 'Kuruma', price = 70000, requiredLevel = 2, requiredRankWeight = 40 },
-        { model = 'schafter2', label = 'Schafter', price = 90000, requiredLevel = 3, requiredRankWeight = 40 },
-        { model = 'jugular', label = 'Jugular', price = 130000, requiredLevel = 4, requiredRankWeight = 55 },
-        { model = 'buffalo4', label = 'Buffalo STX', price = 185000, requiredLevel = 6, requiredRankWeight = 65 }
+        {
+            model = 'sultan',
+            label = 'Sultan',
+            price = 45000,
+            requiredLevel = 1,
+            requiredRankWeight = 0,
+            maxOwned = 5,
+            spawnColor = { primaryIndex = 111, secondaryIndex = 111, pearlescentIndex = 111, wheelColorIndex = 111 }
+        },
+        {
+            model = 'kuruma',
+            label = 'Kuruma',
+            price = 70000,
+            requiredLevel = 2,
+            requiredRankWeight = 40,
+            maxOwned = 4,
+            spawnColor = { primaryIndex = 0, secondaryIndex = 0, pearlescentIndex = 0, wheelColorIndex = 0 }
+        },
+        {
+            model = 'schafter2',
+            label = 'Schafter',
+            price = 90000,
+            requiredLevel = 3,
+            requiredRankWeight = 40,
+            maxOwned = 3,
+            spawnColor = { primaryIndex = 12, secondaryIndex = 12, pearlescentIndex = 12, wheelColorIndex = 12 }
+        },
+        {
+            model = 'jugular',
+            label = 'Jugular',
+            price = 130000,
+            requiredLevel = 4,
+            requiredRankWeight = 55,
+            maxOwned = 2,
+            spawnColor = { primaryIndex = 27, secondaryIndex = 27, pearlescentIndex = 27, wheelColorIndex = 27 }
+        },
+        {
+            model = 'buffalo4',
+            label = 'Buffalo STX',
+            price = 185000,
+            requiredLevel = 6,
+            requiredRankWeight = 65,
+            maxOwned = 2,
+            spawnColor = { primaryIndex = 39, secondaryIndex = 39, pearlescentIndex = 39, wheelColorIndex = 39 }
+        }
     },
     aircraft = {
-        { model = 'maverick', label = 'Maverick', price = 300000, requiredLevel = 4, requiredRankWeight = 55 },
-        { model = 'frogger', label = 'Frogger', price = 420000, requiredLevel = 6, requiredRankWeight = 65 },
-        { model = 'swift', label = 'Swift', price = 650000, requiredLevel = 8, requiredRankWeight = 75 },
-        { model = 'vestra', label = 'Vestra', price = 900000, requiredLevel = 9, requiredRankWeight = 80 }
+        {
+            model = 'maverick',
+            label = 'Maverick',
+            price = 300000,
+            requiredLevel = 4,
+            requiredRankWeight = 55,
+            maxOwned = 2,
+            spawnColor = { primaryIndex = 12, secondaryIndex = 12, pearlescentIndex = 12, wheelColorIndex = 12 }
+        },
+        {
+            model = 'frogger',
+            label = 'Frogger',
+            price = 420000,
+            requiredLevel = 6,
+            requiredRankWeight = 65,
+            maxOwned = 2,
+            spawnColor = { primaryIndex = 27, secondaryIndex = 27, pearlescentIndex = 27, wheelColorIndex = 27 }
+        },
+        {
+            model = 'swift',
+            label = 'Swift',
+            price = 650000,
+            requiredLevel = 8,
+            requiredRankWeight = 75,
+            maxOwned = 1,
+            spawnColor = { primaryIndex = 111, secondaryIndex = 111, pearlescentIndex = 111, wheelColorIndex = 111 }
+        },
+        {
+            model = 'vestra',
+            label = 'Vestra',
+            price = 900000,
+            requiredLevel = 9,
+            requiredRankWeight = 80,
+            maxOwned = 1,
+            spawnColor = { primaryIndex = 0, secondaryIndex = 0, pearlescentIndex = 0, wheelColorIndex = 0 }
+        }
     }
 }
 
@@ -586,6 +685,7 @@ Config.Messages = {
     missionNeedJoin = 'Debes unirte a la mision antes de completarla.',
     recipeDone = 'Proceso completado.',
     weaponBought = 'Compra realizada.',
+    assetModelLimit = 'Tu organizacion ya alcanzo el limite para ese modelo.',
     clothingOpened = 'Abriendo vestidor...',
     ownershipTransferred = 'Liderazgo transferido correctamente.',
     dailyLimitReached = 'Se alcanzo el limite diario para esta accion.',
