@@ -17,11 +17,11 @@ Script para FiveM + ESX Legacy (ultima version) que agrega una plaga zombie con:
 
 ```txt
 esx_plaga_zombie/
-├─ fxmanifest.lua
-├─ config.lua
-├─ client/main.lua
-├─ server/main.lua
-└─ sql/install.sql
+|- fxmanifest.lua
+|- config.lua
+|- client/main.lua
+|- server/main.lua
+`- sql/install.sql
 ```
 
 ## Instalacion
